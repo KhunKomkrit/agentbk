@@ -15,6 +15,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
+# Import mcp modules at module level so Python's import lock is acquired once
+# on first import, not inside multiple concurrent threads (deadlock risk).
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.stdio import stdio_client, StdioServerParameters
+from mcp import ClientSession
+
 
 def _extract_tools(result_tools: list) -> tuple[list[dict], set[str]]:
     tools: list[dict] = []
@@ -75,9 +81,6 @@ class MCPClient:
 
     async def connect(self, url: str) -> None:
         """Fetch tool schemas via HTTP. Fails silently if unreachable."""
-        from mcp.client.streamable_http import streamablehttp_client
-        from mcp import ClientSession
-
         self._url        = url
         self._tools      = []
         self._tool_names = set()
@@ -91,9 +94,6 @@ class MCPClient:
             pass
 
     async def _http_call(self, name: str, arguments: dict[str, Any]) -> str:
-        from mcp.client.streamable_http import streamablehttp_client
-        from mcp import ClientSession
-
         async with streamablehttp_client(self._url, headers=self._headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -104,9 +104,6 @@ class MCPClient:
 
     async def connect_stdio(self) -> None:
         """Spawn subprocess, fetch tool schemas, then terminate. Fails silently."""
-        from mcp.client.stdio import stdio_client, StdioServerParameters
-        from mcp import ClientSession
-
         self._tools      = []
         self._tool_names = set()
         try:
@@ -124,9 +121,6 @@ class MCPClient:
             pass
 
     async def _stdio_call(self, name: str, arguments: dict[str, Any]) -> str:
-        from mcp.client.stdio import stdio_client, StdioServerParameters
-        from mcp import ClientSession
-
         params = StdioServerParameters(
             command=self._command,
             args=self._args,
