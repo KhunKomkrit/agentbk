@@ -8,6 +8,10 @@ from openai import AsyncOpenAI
 from app.providers.base import BaseLLMProvider, ToolCallRequest
 
 
+# Model-name substrings that indicate a vision-capable Ollama model.
+_VISION_KEYWORDS = ("llava", "vision", "-vl", "minicpm", "moondream", "bakllava", "qwen2-vl")
+
+
 class OllamaProvider(BaseLLMProvider):
     name = "ollama"
 
@@ -17,6 +21,8 @@ class OllamaProvider(BaseLLMProvider):
         if not base_url.endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
         self.model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        # Vision support is inferred from the model name.
+        self.supports_vision = any(kw in self.model.lower() for kw in _VISION_KEYWORDS)
         self._client = AsyncOpenAI(
             base_url=base_url,
             api_key="ollama",  # required by SDK, ignored by Ollama

@@ -76,6 +76,7 @@ class AgentRouter:
         # Ollama preflight — auto-start server and pull model if needed
         # Runs in background so UI can show progress immediately
         self._ollama_ok = False
+        self._ollama_ready_event = threading.Event()  # signals _warmup to proceed
         threading.Thread(target=self._preflight_ollama, daemon=True).start()
 
         # MCP clients — one per enabled server in mcp_servers.json
@@ -106,8 +107,48 @@ class AgentRouter:
 
     # ── public ────────────────────────────────────────────────────────────────
 
-    def start_stream(self, user_text: str) -> None:
-        self._memory.add("user", user_text)
+    def start_stream(self, user_text: str, attachment=None) -> None:
+        """Begin an LLM stream, optionally with a file/image attachment.
+
+        ``attachment`` is an ``AttachmentResult`` (from app.agent.attachment).
+        - image + provider supports_vision → content list with text + image_url block
+        - image + no vision support → plain text with a notice appended
+        - pdf / text → extracted content appended to user message as text
+        """
+        content: str | list
+
+        if attachment is None:
+            content = user_text
+        elif attachment.kind == "image":
+            if self._provider.supports_vision and attachment.image_b64:
+                # Build OpenAI-style multimodal content list.
+                # Anthropic provider converts this in _convert_messages().
+                data_url = f"data:{attachment.media_type};base64,{attachment.image_b64}"
+                content = [
+                    {"type": "text", "text": user_text or "อธิบายรูปนี้ให้หน่อย"},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]
+            else:
+                # Text-only model — just tell the user it's not supported.
+                notice = (
+                    f"\n\n[แนบรูป: {attachment.filename}]\n"
+                    f"⚠ model ที่ใช้งานอยู่ ({self._provider.model}) ไม่รองรับ vision\n"
+                    f"เปลี่ยนไปใช้ Anthropic (Claude) หรือ Ollama vision model เช่น llava, qwen2-vl"
+                )
+                content = (user_text + notice) if user_text else notice.strip()
+        else:
+            # PDF or text — inject extracted content as context.
+            file_block = (
+                f"\n\n---\nไฟล์แนบ: {attachment.filename}\n"
+                f"{attachment.text_content}\n---"
+            )
+            content = (user_text + file_block) if user_text else file_block.strip()
+
+        # Store normalised content in memory.
+        # json.dumps handles both str and list[dict] correctly.
+        self._memory.add("user", content)
+        dev_log.log("ATTACH", f"kind={attachment.kind if attachment else 'none'}  "
+                               f"vision={self._provider.supports_vision}")
         threading.Thread(target=self._run_stream, daemon=True).start()
 
     def drain(self, max_items: int = 20) -> list[_Chunk]:
@@ -179,10 +220,14 @@ class AgentRouter:
             threading.Thread(target=_connect, daemon=True).start()
 
     def _warmup_rag(self) -> None:
-        """Pre-load the sentence-transformers embedder so RAG never blocks a response."""
+        """Pre-load the sentence-transformers embedder so RAG never blocks a response.
+
+        Init step is marked done immediately so the UI is not blocked waiting for
+        the embedder. _rag_ready flag gates actual RAG usage once the model is warm.
+        """
+        self._mark_init_step_done("RAG")   # unblock UI right away
         dev_log.log("RAG", "loading embedder in background…")
         t0 = time.perf_counter()
-        done = threading.Event()
 
         def _load() -> None:
             try:
@@ -192,16 +237,14 @@ class AgentRouter:
                 dev_log.log("RAG", "embedder ready ✓", elapsed=time.perf_counter() - t0)
             except Exception as e:
                 dev_log.log("WARN", f"embedder load failed: {e}", elapsed=time.perf_counter() - t0)
-            finally:
-                done.set()
 
         threading.Thread(target=_load, daemon=True).start()
-        if not done.wait(timeout=120.0):
-            dev_log.log("WARN", "RAG embedder timeout (120s) — RAG disabled for this session")
-        self._mark_init_step_done("RAG")
 
     def _warmup(self) -> None:
         """Pre-warm the provider's KV cache with the system prompt."""
+        # Wait for Ollama preflight to finish before trying to stream
+        # (prevents hanging when Ollama is still starting up or pulling model)
+        self._ollama_ready_event.wait(timeout=180.0)
         dev_log.log("LLM", "KV-cache warmup starting…")
         t0 = time.perf_counter()
         async def _do():
@@ -210,9 +253,14 @@ class AgentRouter:
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user",   "content": "hi"},
                 ]
-                async for _ in self._provider.stream(warmup_msgs):
-                    break   # one token is enough to fill the cache
+                # Use wait_for to prevent hanging forever on unresponsive provider
+                async def _stream_one():
+                    async for _ in self._provider.stream(warmup_msgs):
+                        break
+                await asyncio.wait_for(_stream_one(), timeout=30.0)
                 dev_log.log("LLM", "KV-cache warm ✓", elapsed=time.perf_counter() - t0)
+            except asyncio.TimeoutError:
+                dev_log.log("WARN", "warmup timed out (30s)", elapsed=time.perf_counter() - t0)
             except Exception as e:
                 dev_log.log("WARN", f"warmup failed: {e}", elapsed=time.perf_counter() - t0)
         asyncio.run(_do())
@@ -237,6 +285,7 @@ class AgentRouter:
         if not ok:
             dev_log.log("WARN", f"Ollama preflight failed: {msg}")
             self.result_queue.put(_Chunk(kind="ollama_progress", text=f"⚠ {msg}"))
+        self._ollama_ready_event.set()  # unblock _warmup regardless of success
         self._mark_init_step_done("Ollama")
 
     def _mark_init_step_done(self, step_name: str) -> None:
@@ -255,11 +304,18 @@ class AgentRouter:
     async def _async_stream(self) -> None:
         t_start = time.perf_counter()
 
-        # Build system prompt, optionally augmented with RAG context
-        last_user = next(
+        # Build system prompt, optionally augmented with RAG context.
+        # last_user_content may be a list (multimodal) — extract text part for RAG/logging.
+        last_user_content = next(
             (m.get("content", "") for m in reversed(self._memory.messages)
              if m.get("role") == "user"),
             "",
+        )
+        # Flatten multimodal content to a plain string for RAG search and logging.
+        last_user = (
+            " ".join(b.get("text", "") for b in last_user_content if isinstance(b, dict))
+            if isinstance(last_user_content, list)
+            else last_user_content
         )
         dev_log.log("LLM", f"user={last_user[:60]!r}  history={len(self._memory.messages)} msgs")
 

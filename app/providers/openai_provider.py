@@ -10,6 +10,7 @@ from app.providers.base import BaseLLMProvider, ToolCallRequest
 
 class OpenAIProvider(BaseLLMProvider):
     name = "openai"
+    supports_vision = True  # gpt-4o and gpt-4o-mini both accept image_url blocks.
 
     def __init__(self) -> None:
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")

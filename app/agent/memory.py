@@ -17,7 +17,7 @@ class ConversationMemory:
     def messages(self) -> list[dict]:
         return self._messages
 
-    def add(self, role: str, content: str) -> None:
+    def add(self, role: str, content: "str | list") -> None:
         self._messages.append({"role": role, "content": content})
         self._trim()
 

@@ -65,6 +65,7 @@ class _FakeResponse:
 
 class AnthropicProvider(BaseLLMProvider):
     name = "anthropic"
+    supports_vision = True  # All Claude 3+ models accept image content blocks.
 
     def __init__(self) -> None:
         self.model  = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
@@ -237,7 +238,45 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                 })
             raw.append({"role": "assistant", "content": blocks})
         else:
-            raw.append({"role": role, "content": msg.get("content", "")})
+            # Content may be a plain string or a list of content blocks
+            # (the latter when the user attached an image via vision path).
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Convert OpenAI-style content block list → Anthropic format.
+                ant_blocks: list[dict] = []
+                for block in content:
+                    if isinstance(block, str):
+                        ant_blocks.append({"type": "text", "text": block})
+                    elif block.get("type") == "text":
+                        ant_blocks.append({"type": "text", "text": block.get("text", "")})
+                    elif block.get("type") == "image_url":
+                        # OpenAI: {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}
+                        # Anthropic: {"type":"image","source":{"type":"base64","media_type":...,"data":...}}
+                        url = block.get("image_url", {}).get("url", "")
+                        if url.startswith("data:"):
+                            # Parse "data:<media_type>;base64,<data>"
+                            header, b64data = url.split(",", 1)
+                            media_type = header.split(";")[0].split(":", 1)[1]
+                            ant_blocks.append({
+                                "type": "image",
+                                "source": {
+                                    "type":       "base64",
+                                    "media_type": media_type,
+                                    "data":        b64data,
+                                },
+                            })
+                        else:
+                            # URL-referenced image — pass as-is (Anthropic supports url source).
+                            ant_blocks.append({
+                                "type": "image",
+                                "source": {"type": "url", "url": url},
+                            })
+                    else:
+                        # Unknown block type — skip silently.
+                        pass
+                raw.append({"role": role, "content": ant_blocks})
+            else:
+                raw.append({"role": role, "content": content})
 
     # Merge consecutive user turns (Anthropic rejects two user turns in a row)
     merged: list[dict] = []

@@ -16,6 +16,8 @@ class ToolCallRequest:
 class BaseLLMProvider(ABC):
     name: str
     model: str
+    # True when this provider+model can accept image content blocks.
+    supports_vision: bool = False
 
     @abstractmethod
     async def stream(self, messages: list[dict]) -> AsyncIterator[str]:

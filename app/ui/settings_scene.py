@@ -105,6 +105,7 @@ class SettingsScene(BaseScene):
         self._icon_next    = icon_manager.get("chevron-right",   size=16, color=(210, 220, 240))
         self._icon_edit    = icon_manager.get("pencil-square",   size=13, color=(210, 225, 255))
         self._icon_del     = icon_manager.get("x-mark",          size=13, color=(255, 200, 200))
+        self._icon_refresh = icon_manager.get("arrow-path",      size=14, color=(200, 215, 255))
 
         # Knowledge Base state
         self._kb_docs:     list[dict] = []
@@ -530,9 +531,9 @@ class SettingsScene(BaseScene):
             self._model_refresh_rect = ref_r
             ref_col = REFRESH_HOV if self._model_refresh_hov else REFRESH_COL
             pygame.draw.rect(surface, ref_col, ref_r, border_radius=5)
-            lbl = self._font_sm.render("↻", True, (200, 215, 255))
-            surface.blit(lbl, (ref_r.centerx - lbl.get_width() // 2,
-                               ref_r.centery - lbl.get_height() // 2))
+            ri = self._icon_refresh
+            surface.blit(ri, (ref_r.centerx - ri.get_width() // 2,
+                              ref_r.centery - ri.get_height() // 2))
         else:
             self._model_refresh_rect = pygame.Rect(0, 0, 1, 1)
 
