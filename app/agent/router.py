@@ -410,6 +410,7 @@ class AgentRouter:
                 for round_n in range(_MAX_TOOL_ROUNDS + 1):
                     tool_requests = None
                     round_text    = ""
+                    round_chunks: list[str] = []
 
                     async for item in self._provider.stream_tools(messages, all_tools):
                         if isinstance(item, list):
@@ -420,11 +421,16 @@ class AgentRouter:
                                 dev_log.log("TIMING", f"TTFT={t_first_chunk - t_start:.3f}s  (round {round_n})")
                             round_text += item
                             full       += item
-                            self.result_queue.put(_Chunk(kind="chunk", text=item))
+                            round_chunks.append(item)
 
                     if tool_requests is None:
+                        # Final round: flush buffered text to UI
+                        for ch in round_chunks:
+                            self.result_queue.put(_Chunk(kind="chunk", text=ch))
                         self.result_queue.put(_Chunk(kind="done"))
                         break
+                    # Tool round: discard buffered chunks (intermediate JSON/reasoning)
+                    round_chunks.clear()
 
                     dev_log.log("TOOL", f"round {round_n}: {[tc.name for tc in tool_requests]}")
                     messages.append({
