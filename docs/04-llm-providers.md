@@ -24,7 +24,7 @@ classDiagram
 
     class OllamaProvider {
         +name = "ollama"
-        +model = env OLLAMA_MODEL
+        +model = env OLLAMA_MODEL (default: qwen2.5:3b)
         -_client: AsyncOpenAI
     }
 
@@ -101,13 +101,14 @@ flowchart TD
     ENV["ACTIVE_PROVIDER ใน .env\n(default: ollama)"]
     LOAD["_load_provider()"]
     CHECK{value?}
+    OM["OllamaManager\n(auto-start + pull model)"]
     OLL["OllamaProvider()"]
     ANT["AnthropicProvider()"]
     OAI["OpenAIProvider()"]
     ROUTER["AgentRouter._provider"]
 
     ENV --> LOAD --> CHECK
-    CHECK -->|ollama / default| OLL --> ROUTER
+    CHECK -->|ollama / default| OM --> OLL --> ROUTER
     CHECK -->|anthropic| ANT --> ROUTER
     CHECK -->|openai| OAI --> ROUTER
 ```
@@ -124,6 +125,10 @@ self._client = AsyncOpenAI(
     api_key="ollama",   # required by SDK, ignored by Ollama
 )
 ```
+
+> **OllamaManager** (`app/agent/ollama_manager.py`) จะ auto-start Ollama และ pull model
+> ก่อนที่ OllamaProvider จะถูกสร้าง — ไม่ต้องรัน `ollama serve` หรือ `ollama pull` เอง
+> Default model: `qwen2.5:3b` (2GB, tool-calling capable)
 
 ### stream_tools() — single-pass tool accumulation
 

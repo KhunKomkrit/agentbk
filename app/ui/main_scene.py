@@ -36,9 +36,11 @@ class MainScene(BaseScene):
         self._font_title = font_manager.get_bold(14)
         self._font_state = font_manager.get(11)
         self._init_complete = False
-        self._loading_messages = []
+        self._loading_messages: list[str] = []
         self._loading_dots = 0
         self._loading_tick = 0
+        self._ollama_status = ""      # latest ollama_progress text
+        self._ollama_frac: float = 0.0  # 0.0–1.0 download fraction
 
         # load SVG icons (16×16 tinted to match text colour)
         from app.ui import icon_manager
@@ -111,11 +113,19 @@ class MainScene(BaseScene):
                     chunk = self._router.result_queue.get_nowait()
                     if chunk.kind == "init_progress":
                         self._loading_messages.append(chunk.text)
-                        # Check if all systems ready
                         if self._router.is_ready:
                             self._init_complete = True
                             self.avatar.state = AvatarState.IDLE
-                except:
+                    elif chunk.kind == "ollama_progress":
+                        self._ollama_status = chunk.text
+                        # parse fraction from e.g. "pulling 45%" → 0.45
+                        import re
+                        m = re.search(r"(\d+)%", chunk.text)
+                        if m:
+                            self._ollama_frac = int(m.group(1)) / 100.0
+                        else:
+                            self._ollama_frac = 0.0
+                except Exception:
                     break
         
         # Set loading state if not ready
@@ -192,7 +202,7 @@ class MainScene(BaseScene):
             self._draw_loading_overlay(surface, w, h)
 
     def _draw_loading_overlay(self, surface: pygame.Surface, w: int, h: int) -> None:
-        """Draw loading overlay with progress messages."""
+        """Draw loading overlay with progress messages and optional download bar."""
         # Semi-transparent background
         overlay = pygame.Surface((w, h), pygame.SRCALPHA)
         overlay.fill((10, 10, 20, 220))
@@ -200,7 +210,7 @@ class MainScene(BaseScene):
         
         # Loading box
         box_w = min(w - 40, 320)
-        box_h = min(h - 80, 200)
+        box_h = min(h - 80, 220)
         box_x = (w - box_w) // 2
         box_y = (h - box_h) // 2
         box_rect = pygame.Rect(box_x, box_y, box_w, box_h)
@@ -212,43 +222,53 @@ class MainScene(BaseScene):
         # Title
         font_title = font_manager.get_bold(16)
         title = font_title.render("Initializing AgentBK", True, (180, 200, 255))
-        surface.blit(title, (box_x + (box_w - title.get_width()) // 2, box_y + 20))
+        surface.blit(title, (box_x + (box_w - title.get_width()) // 2, box_y + 18))
         
         # Animated dots
-        dots = "." * self._loading_dots
-        font_small = font_manager.get(12)
-        dots_surf = font_small.render(dots, True, (120, 140, 200))
-        surface.blit(dots_surf, (box_x + (box_w - dots_surf.get_width()) // 2, box_y + 45))
+        dots = "●" * self._loading_dots + "◦" * (3 - self._loading_dots)
+        font_small = font_manager.get(11)
+        dots_surf = font_small.render(dots, True, (100, 120, 180))
+        surface.blit(dots_surf, (box_x + (box_w - dots_surf.get_width()) // 2, box_y + 42))
         
-        # Progress messages
+        # Progress messages (completed steps with checkmarks)
         font_msg = font_manager.get(13)
-        y_offset = box_y + 70
-        line_height = 22
+        y = box_y + 65
+        lh = 22
+        for msg in self._loading_messages[-4:]:
+            check_x = box_x + 28
+            pygame.draw.circle(surface, (60, 175, 75), (check_x, y + 7), 6)
+            pygame.draw.line(surface, (20, 25, 40), (check_x - 2, y + 7), (check_x, y + 10), 2)
+            pygame.draw.line(surface, (20, 25, 40), (check_x, y + 10), (check_x + 3, y + 4), 2)
+            txt = font_msg.render(msg, True, (160, 180, 220))
+            surface.blit(txt, (check_x + 14, y))
+            y += lh
         
-        # Show latest 3-4 messages
-        display_msgs = self._loading_messages[-4:] if len(self._loading_messages) > 4 else self._loading_messages
-        
-        for msg in display_msgs:
-            # Checkmark icon
-            check_x = box_x + 30
-            check_y = y_offset + 5
-            pygame.draw.circle(surface, (70, 180, 70), (check_x, check_y), 6)
-            pygame.draw.circle(surface, (30, 35, 50), (check_x, check_y), 6, 1)
-            # Simple checkmark (V shape)
-            pygame.draw.line(surface, (30, 35, 50), (check_x - 2, check_y), (check_x, check_y + 2), 2)
-            pygame.draw.line(surface, (30, 35, 50), (check_x, check_y + 2), (check_x + 3, check_y - 2), 2)
-            
-            # Message text
-            text_surf = font_msg.render(msg, True, (160, 180, 220))
-            surface.blit(text_surf, (check_x + 15, y_offset))
-            y_offset += line_height
+        # Ollama download status + progress bar
+        if self._ollama_status and not any("Ollama" in m for m in self._loading_messages):
+            bar_x = box_x + 20
+            bar_y = box_y + box_h - 58
+            bar_w = box_w - 40
+
+            # Status text
+            status_col = (220, 100, 60) if "⚠" in self._ollama_status else (140, 170, 220)
+            st_surf = font_small.render(self._ollama_status[:45], True, status_col)
+            surface.blit(st_surf, (bar_x, bar_y))
+
+            # Progress bar (only when we have a real fraction)
+            if self._ollama_frac > 0:
+                bar_y += 18
+                pygame.draw.rect(surface, (40, 44, 70), pygame.Rect(bar_x, bar_y, bar_w, 8), border_radius=4)
+                fill_w = int(bar_w * self._ollama_frac)
+                if fill_w > 0:
+                    pygame.draw.rect(surface, (70, 140, 220), pygame.Rect(bar_x, bar_y, fill_w, 8), border_radius=4)
+                pct_surf = font_small.render(f"{int(self._ollama_frac * 100)}%", True, (120, 150, 210))
+                surface.blit(pct_surf, (bar_x + bar_w - pct_surf.get_width(), bar_y + 12))
         
         # Hint text at bottom
-        if self._loading_tick > 600:  # After 10 seconds
+        elif self._loading_tick > 600:
             hint_font = font_manager.get(11)
-            hint_text = "This may take a moment..."
-            hint_surf = hint_font.render(hint_text, True, (120, 130, 180))
-            surface.blit(hint_surf, (box_x + (box_w - hint_surf.get_width()) // 2, box_y + box_h - 30))
+            hint_surf = hint_font.render("This may take a moment...", True, (100, 115, 165))
+            surface.blit(hint_surf, (box_x + (box_w - hint_surf.get_width()) // 2, box_y + box_h - 28))
     
     def _draw_avatar_scaled(self, surface: pygame.Surface,
                              card: pygame.Rect, pixel: int) -> None:

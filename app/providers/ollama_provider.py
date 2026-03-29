@@ -16,7 +16,7 @@ class OllamaProvider(BaseLLMProvider):
         # Ensure /v1 suffix for OpenAI-compatible endpoint
         if not base_url.endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
-        self.model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+        self.model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
         self._client = AsyncOpenAI(
             base_url=base_url,
             api_key="ollama",  # required by SDK, ignored by Ollama

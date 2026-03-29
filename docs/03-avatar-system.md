@@ -54,6 +54,7 @@ cheek tint at cols 3,12 row 8
 | `_LED_TH` | (255,200,50) | thinking LED (yellow) |
 | `_LED_TK` | (80,200,255) | talking LED (cyan) |
 | `_LED_E` | (220,60,60) | error LED (red) |
+| `_LED_L` | (80+v//2, 140+v//2, 255) | loading LED (pulsing cyan) |
 
 ---
 
@@ -113,6 +114,13 @@ graph LR
         E3["LED: red fast blink every 6 ticks"]
         E4["head: shake sin(tick×0.9)×2"]
     end
+
+    subgraph LOADING
+        L1["eyes: open iris+pupil+glint (same as IDLE)"]
+        L2["mouth: flat/neutral"]
+        L3["LED: cyan pulsing (sin wave, brighter than THINKING)"]
+        L4["no bob — avatar holds still"]
+    end
 ```
 
 ---
@@ -149,6 +157,7 @@ graph TB
 | THINKING | yellow pulse | `led_pulse` sin interpolation |
 | TALKING | `_LED_TK` cyan | solid |
 | ERROR | `_LED_E` red | blink every 6 ticks (on/head color) |
+| LOADING | `(80+v//2, 140+v//2, 255)` cyan | pulsing (sin wave, `v` = 0-127) |
 
 ---
 

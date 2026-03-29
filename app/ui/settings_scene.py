@@ -34,8 +34,12 @@ _PROVIDER_LABELS = {
 _MODELS: dict[str, list[str]] = {
     "anthropic": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
     "openai":    ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-    "ollama":    ["llama3", "mistral", "gemma3"],
+    "ollama":    ["qwen2.5:3b", "qwen2.5-coder:7b", "llama3.2:3b", "mistral", "phi3.5"],
 }
+
+# Refresh button color (next to model arrows for Ollama)
+REFRESH_COL = (50, 80, 130)
+REFRESH_HOV = (70, 110, 170)
 
 _MCP_PRESETS = [
     ("Space MCP",      "http://localhost:8000/mcp"),
@@ -88,6 +92,11 @@ class SettingsScene(BaseScene):
         self._font_sm   = font_manager.get(12)
         self._font_h    = font_manager.get_bold(12)
 
+        # Ollama: refresh model list from server, add missing entries
+        self._refresh_ollama_models()
+        self._model_refresh_rect = pygame.Rect(0, 0, 1, 1)
+        self._model_refresh_hov  = False
+
         from app.ui import icon_manager
         self._icon_back    = icon_manager.get("arrow-left",      size=14, color=(200, 210, 230))
         self._icon_settings= icon_manager.get("settings",        size=16, color=(160, 180, 220))
@@ -129,6 +138,21 @@ class SettingsScene(BaseScene):
             self._kb_docs = RAGStore().list_documents()
         except Exception:
             self._kb_docs = []
+
+    def _refresh_ollama_models(self) -> None:
+        """Query running Ollama for installed models and merge into the list."""
+        try:
+            from app.agent.ollama_manager import list_models
+            local = list_models()
+            if local:
+                existing = _MODELS["ollama"]
+                merged = list(existing)
+                for m in local:
+                    if m not in merged:
+                        merged.append(m)
+                _MODELS["ollama"] = merged
+        except Exception:
+            pass
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -183,6 +207,7 @@ class SettingsScene(BaseScene):
             self._save_hov  = self._save_rect.collidepoint(event.pos)
             scroll_pos_m    = (event.pos[0], event.pos[1] - HEADER_H + self._scroll_y)
             self._clear_hov = self._clear_rect.collidepoint(scroll_pos_m)
+            self._model_refresh_hov = self._model_refresh_rect.collidepoint(scroll_pos_m)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 4:
             self._scroll_y = max(0, self._scroll_y - 20)
@@ -217,6 +242,10 @@ class SettingsScene(BaseScene):
         if self._model_next.collidepoint(scroll_pos):
             models = _MODELS[self._provider]
             self._model_idx = (self._model_idx + 1) % len(models)
+        if self._provider == "ollama" and self._model_refresh_rect.collidepoint(scroll_pos):
+            self._refresh_ollama_models()
+            # Keep current index valid after refresh
+            self._model_idx = min(self._model_idx, len(_MODELS["ollama"]) - 1)
         if self._toggle_rect.collidepoint(scroll_pos):
             self._always_on_top = not self._always_on_top
 
@@ -472,7 +501,7 @@ class SettingsScene(BaseScene):
     def _draw_model(self, surface: pygame.Surface, w: int, y: int) -> int:
         cx = PAD
         cw = w - PAD * 2
-        ch = 58
+        ch = 58 if self._provider != "ollama" else 82   # extra row for refresh button
         pygame.draw.rect(surface, CARD_BG, pygame.Rect(cx, y, cw, ch), border_radius=RADIUS)
         ht = self._font_h.render("Model", True, MUTED)
         surface.blit(ht, (cx + 10, y + 8))
@@ -494,6 +523,19 @@ class SettingsScene(BaseScene):
         mt = self._font_sm.render(model, True, TEXT_COL)
         surface.blit(mt, (cx + cw // 2 - mt.get_width() // 2,
                           y + 24 + aw // 2 - mt.get_height() // 2))
+
+        # Refresh button (Ollama only) — query installed models
+        if self._provider == "ollama":
+            ref_r = pygame.Rect(cx + cw - 10 - aw, y + 54, aw, 20)
+            self._model_refresh_rect = ref_r
+            ref_col = REFRESH_HOV if self._model_refresh_hov else REFRESH_COL
+            pygame.draw.rect(surface, ref_col, ref_r, border_radius=5)
+            lbl = self._font_sm.render("↻", True, (200, 215, 255))
+            surface.blit(lbl, (ref_r.centerx - lbl.get_width() // 2,
+                               ref_r.centery - lbl.get_height() // 2))
+        else:
+            self._model_refresh_rect = pygame.Rect(0, 0, 1, 1)
+
         return y + ch
 
     def _draw_display(self, surface: pygame.Surface, w: int, y: int) -> int:

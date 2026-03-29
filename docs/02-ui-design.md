@@ -49,6 +49,7 @@ graph LR
         THINK_C["#B4B450\n● thinking"]
         TALK_C["#5082C8\n● talking"]
         ERR_C["#C85050\n● error"]
+        LOAD_C["#50C8C8\n● loading (cyan pulse)"]
     end
 ```
 
@@ -69,11 +70,15 @@ stateDiagram-v2
     state "Talking" as S3 {
         note: ปากเปิด-ปิด\nToken stream ไหลเข้า chat\nInput disabled
     }
+    state "Loading" as S5 {
+        note: Cyan LED pulsing\nOverlay + progress bar\nInit steps 1→4\nOllama download progress
+    }
     state "Error" as S4 {
         note: Avatar สีแดง\nแสดง error message\nInput ใช้ได้อีกครั้ง
     }
 
-    [*] --> S1
+    [*] --> S5 : app start
+    S5 --> S1 : all systems ready (is_ready)
     S1 --> S2 : ส่งข้อความ
     S2 --> S3 : ได้รับ token แรก
     S3 --> S1 : LLM จบ

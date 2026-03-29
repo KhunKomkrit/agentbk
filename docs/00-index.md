@@ -15,6 +15,7 @@
 | [05-dev-guide.md](./05-dev-guide.md) | Setup, conventions, workflow, testing |
 | [06-agent-tools.md](./06-agent-tools.md) | Conversation memory, built-in tools, tool loop |
 | [07-mcp-rag.md](./07-mcp-rag.md) | Multi-MCP config, RAG knowledge base, vector search |
+| [08-ollama-manager.md](./08-ollama-manager.md) | Ollama auto-start, model pull, self-contained setup |
 
 ---
 
@@ -29,13 +30,20 @@ mindmap
         THINKING droopy eyes
         TALKING mouth flap
         ERROR X-eyes shake
+        LOADING cyan pulse LED
+      Loading Overlay
+        4-step progress tracking
+        Ollama download progress bar
+        Animated dots
+        Auto-dismiss on ready
       Chat Panel
         Streaming bubbles
         Tool indicator pill
         Thai text wrap
       Settings
         Provider selector
-        MCP Servers list (N servers)
+        Model selector with refresh
+        MCP Servers list
         Knowledge Base file manager
         Danger Zone clear history
     Agent Core
@@ -44,6 +52,13 @@ mindmap
         Keyword routing fast path
         KV-cache warmup
         RAG context injection
+        4-step init tracking
+      OllamaManager
+        is_running check
+        find_binary PATH search
+        launch subprocess
+        list_models dynamic
+        pull_model with progress
       Memory
         Persistent JSON
         Rolling 100 messages
@@ -59,12 +74,18 @@ mindmap
         sentence-transformers
         ChromaDB vector store
         PDF TXT MD ingest
+    Window System
+      Anchor-based drag
+        No event.rel drift
+        tracked_win_pos
+      Resize bottom-right grip
+      tick_busy_loop 60fps
     Icon System
       Heroicons SVG
       SVG path parser
       pygame Surface tinting
     LLM Providers
-      Ollama Local
+      Ollama Local auto-start
       Anthropic Claude
       OpenAI GPT
     TTS
@@ -73,7 +94,7 @@ mindmap
     macOS
       menubar NSStatusItem
       always-on-top SDL2
-      drag and resize
+      drag and resize smooth
 ```
 
 ---

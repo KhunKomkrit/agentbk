@@ -21,13 +21,11 @@ uv sync
 
 # 3. ตั้งค่า env
 cp .env.example .env
-# แก้ไข .env
+# แก้ไข .env (ตั้ง ACTIVE_PROVIDER=ollama ไว้เลยถ้าใช้ Ollama)
 
-# 4. pull Ollama model
-ollama pull qwen2.5-coder:7b
-
-# 5. run
+# 4. run
 uv run python -m app.main
+# AgentBK จะ auto-start Ollama และ pull model ให้อัตโนมัติ (ครั้งแรก ~2-5 นาที)
 ```
 
 ---
@@ -38,7 +36,7 @@ uv run python -m app.main
 |----------|---------|----------|
 | `ACTIVE_PROVIDER` | `ollama` | provider ที่ใช้: `ollama` / `anthropic` / `openai` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
-| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | model ที่ใช้ (ต้อง support tool calling) |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | model ที่ใช้ (ต้อง support tool calling) |
 | `ANTHROPIC_API_KEY` | — | สำหรับ Phase 4 |
 | `OPENAI_API_KEY` | — | สำหรับ Phase 4 |
 | `MCP_ENABLED` | `false` | เปิด/ปิด MCP Server |
@@ -68,7 +66,9 @@ agentbk-01/
 │   ├── agent/
 │   │   ├── router.py           AgentRouter (memory + tool loop + queue)
 │   │   ├── memory.py           ConversationMemory (~/.agentbk/history.json)
-│   │   └── tools.py            TOOL_SCHEMAS + execute_tool()
+    │   ├── tools.py            TOOL_SCHEMAS + execute_tool()
+    │   ├── ollama_manager.py   OllamaManager (auto-start Ollama + pull model)
+    │   └── mcp_client.py       MCPClient (streamable-http transport)
 │   │
 │   ├── providers/
 │   │   ├── base.py             BaseLLMProvider (stream + complete)

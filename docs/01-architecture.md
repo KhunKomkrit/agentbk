@@ -10,14 +10,21 @@ graph TB
             CP["Chat Scene\n(messages + streaming)"]
             ST["Settings Scene\n(provider, MCP, danger zone)"]
             MS["Main Scene\n(avatar card + nav buttons)"]
+            LO["Loading Overlay\n(progress + download bar)"]
         end
 
         subgraph Core["Agent Core"]
             RT["AgentRouter\n(thread + queue)"]
+            OM["OllamaManager\n(auto-start + pull)"]
             MEM["ConversationMemory\n(~/.agentbk/history.json)"]
             TL["ToolRegistry\n(get_datetime, calculate, weather)"]
             MCP["MCPClient × N\n(~/.agentbk/mcp_servers.json)"]
             RAG["RAGStore\n(ChromaDB ~/.agentbk/rag/)"]
+        end
+
+        subgraph Win["Window System"]
+            DRG["Anchor Drag\n(no event.rel drift)"]
+            RSZ["Resize Grip\n(bottom-right)"]
         end
 
         subgraph Icons["Icon System"]
@@ -40,7 +47,10 @@ graph TB
         OAI["OpenAIProvider\n(openai SDK)"]
     end
 
+    MS -->|polls result_queue| LO
     CP -->|user text| RT
+    RT -->|preflight| OM
+    OM -->|ensure_ready| OLL
     RT -->|memory.add + thread| MEM
     RT -->|stream_tools() or stream()| OLL
     RT -->|stream_tools() or stream()| ANT
@@ -54,6 +64,48 @@ graph TB
     AV <-->|state shared ref| CP
     IM --> SVG
     MB -->|avatar.draw() render| AV
+```
+
+---
+
+## Initialization Sequence (4 Steps)
+
+```mermaid
+sequenceDiagram
+    participant UI as MainScene (UI)
+    participant R as AgentRouter
+    participant OM as OllamaManager
+    participant MCP as MCPClient(s)
+    participant LLM as LLMProvider
+    participant RAG as RAGStore
+
+    UI->>R: new AgentRouter()
+    Note over UI: Loading overlay shown\nButtons disabled
+
+    par Step 1 — Ollama preflight
+        R->>OM: ensure_ready(model)
+        OM-->>R: Ollama running ✓
+        OM-->>R: model ready ✓ (or pull with progress)
+        R->>UI: Chunk(ollama_progress) → progress bar
+        R->>UI: Chunk(init_progress "Ollama ready 1/4")
+    and Step 2 — MCP connect
+        R->>MCP: connect(url) × N servers
+        MCP-->>R: tools list
+        R->>UI: Chunk(init_progress "MCP ready 2/4")
+    end
+
+    par Step 3 — LLM warmup
+        R->>LLM: stream(["hi"]) → drain 1 token
+        LLM-->>R: KV-cache warm
+        R->>UI: Chunk(init_progress "LLM ready 3/4")
+    and Step 4 — RAG embedder
+        R->>RAG: get_embedder() (background)
+        RAG-->>R: embedder ready
+        R->>UI: Chunk(init_progress "RAG ready 4/4")
+    end
+
+    R->>UI: is_ready = True
+    Note over UI: Overlay dismissed\nAvatar → IDLE\nButtons enabled
 ```
 
 ---
@@ -78,6 +130,7 @@ classDiagram
     class AgentRouter {
         +result_queue: SimpleQueue
         +speaker: TTSSpeaker
+        +is_ready: bool
         +start_stream(user_text) void
         +drain(max_items) list[_Chunk]
         +clear_history() void
@@ -87,8 +140,21 @@ classDiagram
         -_memory: ConversationMemory
         -_mcps: list[MCPClient]
         -_rag_store: RAGStore
+        -_init_steps_total: int
+        -_preflight_ollama() void
         -_warmup() coroutine
         -_async_stream() coroutine
+    }
+
+    class OllamaManager {
+        +DEFAULT_MODEL: str
+        +is_running(timeout) bool
+        +find_binary() str
+        +launch(timeout) bool
+        +list_models() list~str~
+        +has_model(name) bool
+        +pull_model(name, progress_cb) bool
+        +ensure_ready(model, progress_cb) tuple
     }
 
     class MCPClient {
@@ -157,7 +223,7 @@ classDiagram
     }
 
     class _Chunk {
-        +kind: chunk|done|error|tool_use
+        +kind: chunk|done|error|tool_use|init_progress|ollama_progress
         +text: str
     }
 
@@ -166,6 +232,7 @@ classDiagram
     AgentRouter --> _Chunk
     AgentRouter --> MCPClient
     AgentRouter --> RAGStore
+    AgentRouter --> OllamaManager
     BaseLLMProvider <|-- OllamaProvider
     BaseLLMProvider <|-- AnthropicProvider
     BaseLLMProvider <|-- OpenAIProvider

@@ -43,7 +43,7 @@ def _wants_tools(text: str) -> bool:
 
 @dataclass
 class _Chunk:
-    kind: Literal["chunk", "done", "error", "tool_use", "init_progress"]
+    kind: Literal["chunk", "done", "error", "tool_use", "init_progress", "ollama_progress"]
     text: str = ""
 
 
@@ -66,12 +66,17 @@ class AgentRouter:
         self.result_queue: queue.SimpleQueue[_Chunk] = queue.SimpleQueue()
         self.is_ready = False  # True when all background init is done
         self._init_steps_done = 0
-        self._init_steps_total = 3  # MCP + LLM warmup + RAG
+        self._init_steps_total = 4  # Ollama + MCP + LLM warmup + RAG
         dev_log.log("BOOT", f"provider={type(self._provider).__name__}  history={len(self._memory.messages)} msgs")
 
         # TTS speaker (lazy import so startup doesn't fail if edge-tts absent)
         from app.tts.speaker import TTSSpeaker
         self.speaker = TTSSpeaker()
+
+        # Ollama preflight — auto-start server and pull model if needed
+        # Runs in background so UI can show progress immediately
+        self._ollama_ok = False
+        threading.Thread(target=self._preflight_ollama, daemon=True).start()
 
         # MCP clients — one per enabled server in mcp_servers.json
         self._mcps: list = []
@@ -204,6 +209,27 @@ class AgentRouter:
                 dev_log.log("WARN", f"warmup failed: {e}", elapsed=time.perf_counter() - t0)
         asyncio.run(_do())
         self._mark_init_step_done("LLM")
+
+    def _preflight_ollama(self) -> None:
+        """Ensure Ollama is running and default model is pulled (Ollama provider only)."""
+        provider_name = os.getenv("ACTIVE_PROVIDER", "ollama").lower()
+        if provider_name != "ollama":
+            self._mark_init_step_done("Ollama")  # skip for cloud providers
+            return
+
+        from app.agent.ollama_manager import ensure_ready, DEFAULT_MODEL
+        model = os.getenv("OLLAMA_MODEL", DEFAULT_MODEL)
+
+        def _progress(text: str, frac: float) -> None:
+            self.result_queue.put(_Chunk(kind="ollama_progress", text=text))
+            dev_log.log("OLLAMA", text)
+
+        ok, msg = ensure_ready(model=model, progress_cb=_progress)
+        self._ollama_ok = ok
+        if not ok:
+            dev_log.log("WARN", f"Ollama preflight failed: {msg}")
+            self.result_queue.put(_Chunk(kind="ollama_progress", text=f"⚠ {msg}"))
+        self._mark_init_step_done("Ollama")
 
     def _mark_init_step_done(self, step_name: str) -> None:
         """Mark an initialization step as complete and notify UI."""
