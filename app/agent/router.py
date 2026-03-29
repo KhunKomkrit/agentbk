@@ -43,50 +43,91 @@ def _wants_tools(text: str) -> bool:
     return any(w in lower for w in _TOOL_WORDS)
 
 
+def _extract_json_objects(text: str) -> list[dict]:
+    """Walk *text* and extract every top-level JSON object, handling nesting."""
+    objects: list[dict] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "{":
+            depth = 0
+            start = i
+            in_str = False
+            escape = False
+            for j in range(i, n):
+                ch = text[j]
+                if escape:
+                    escape = False
+                elif ch == "\\" and in_str:
+                    escape = True
+                elif ch == '"':
+                    in_str = not in_str
+                elif not in_str:
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            candidate = text[start : j + 1]
+                            try:
+                                objects.append(json.loads(candidate))
+                            except json.JSONDecodeError:
+                                pass
+                            i = j
+                            break
+        i += 1
+    return objects
+
+
+def _make_tool_request(obj: dict, known_names: set[str]) -> ToolCallRequest | None:
+    name = obj.get("name") or obj.get("function")
+    if not name or name not in known_names:
+        return None
+    args = obj.get("arguments") or obj.get("parameters") or {}
+    return ToolCallRequest(
+        id=str(uuid.uuid4()),
+        name=name,
+        arguments=json.dumps(args) if not isinstance(args, str) else args,
+    )
+
+
 def _parse_text_tool_calls(
     text: str, known_names: set[str]
 ) -> list[ToolCallRequest] | None:
     """Fallback: parse tool-call JSON that some models emit as plain text.
 
-    Handles:
-      - <tool_call>{...}</tool_call>  (Qwen/Hermes style)
-      - {"name": "...", "arguments": {...}}  (generic one-shot)
-      - [{"name": ...}, ...]  (list form)
+    Handles (in priority order):
+      1. <tool_call>{...}</tool_call>  (Qwen/Hermes style)
+      2. ```json ... ```  (markdown code-fenced JSON)
+      3. Any nested JSON object {\"name\": ..., \"parameters\"/{\"arguments\"}: ...}
     Returns None if nothing parseable is found.
     """
     results: list[ToolCallRequest] = []
 
     # 1. <tool_call>...</tool_call> blocks
     for m in re.finditer(r"<tool_call>\s*(.+?)\s*</tool_call>", text, re.DOTALL):
-        try:
-            obj = json.loads(m.group(1))
-            name = obj.get("name") or obj.get("function")
-            args = obj.get("arguments") or obj.get("parameters") or {}
-            if name and name in known_names:
-                results.append(ToolCallRequest(
-                    id=str(uuid.uuid4()), name=name,
-                    arguments=json.dumps(args) if not isinstance(args, str) else args,
-                ))
-        except (json.JSONDecodeError, AttributeError):
-            pass
-
+        for obj in _extract_json_objects(m.group(1)):
+            req = _make_tool_request(obj, known_names)
+            if req:
+                results.append(req)
     if results:
         return results
 
-    # 2. Bare JSON blobs anywhere in text
-    for m in re.finditer(r"\{[^{}]*\}", text, re.DOTALL):
-        try:
-            obj = json.loads(m.group())
-            name = obj.get("name") or obj.get("function")
-            args = obj.get("arguments") or obj.get("parameters") or {}
-            if name and name in known_names:
-                results.append(ToolCallRequest(
-                    id=str(uuid.uuid4()), name=name,
-                    arguments=json.dumps(args) if not isinstance(args, str) else args,
-                ))
-                break  # take first match
-        except (json.JSONDecodeError, AttributeError):
-            pass
+    # 2. Markdown fenced code blocks: ```json { ... } ```
+    for m in re.finditer(r"```(?:json)?\s*(\{.+?)\s*```", text, re.DOTALL):
+        for obj in _extract_json_objects(m.group(1)):
+            req = _make_tool_request(obj, known_names)
+            if req:
+                results.append(req)
+    if results:
+        return results
+
+    # 3. Any nested JSON object anywhere in text
+    for obj in _extract_json_objects(text):
+        req = _make_tool_request(obj, known_names)
+        if req:
+            results.append(req)
+            break  # take first match only
 
     return results or None
 
