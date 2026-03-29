@@ -88,3 +88,10 @@ class OllamaProvider(BaseLLMProvider):
                     for v in tool_calls_acc.values()
                 ]
                 return
+        # Some Ollama builds emit finish_reason="stop" even when tool_calls
+        # were accumulated — flush them here so the router can dispatch.
+        if tool_calls_acc:
+            yield [
+                ToolCallRequest(id=v["id"], name=v["name"], arguments=v["arguments"])
+                for v in tool_calls_acc.values()
+            ]

@@ -4,12 +4,14 @@ import asyncio
 import json
 import os
 import queue
+import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from app.providers.base import BaseLLMProvider
+from app.providers.base import BaseLLMProvider, ToolCallRequest
 from app.agent.memory import ConversationMemory
 from app.agent.tools import TOOL_SCHEMAS, execute_tool
 from app import dev_log
@@ -39,6 +41,54 @@ def _wants_tools(text: str) -> bool:
     """Heuristic: does this message likely need a tool call?"""
     lower = text.lower()
     return any(w in lower for w in _TOOL_WORDS)
+
+
+def _parse_text_tool_calls(
+    text: str, known_names: set[str]
+) -> list[ToolCallRequest] | None:
+    """Fallback: parse tool-call JSON that some models emit as plain text.
+
+    Handles:
+      - <tool_call>{...}</tool_call>  (Qwen/Hermes style)
+      - {"name": "...", "arguments": {...}}  (generic one-shot)
+      - [{"name": ...}, ...]  (list form)
+    Returns None if nothing parseable is found.
+    """
+    results: list[ToolCallRequest] = []
+
+    # 1. <tool_call>...</tool_call> blocks
+    for m in re.finditer(r"<tool_call>\s*(.+?)\s*</tool_call>", text, re.DOTALL):
+        try:
+            obj = json.loads(m.group(1))
+            name = obj.get("name") or obj.get("function")
+            args = obj.get("arguments") or obj.get("parameters") or {}
+            if name and name in known_names:
+                results.append(ToolCallRequest(
+                    id=str(uuid.uuid4()), name=name,
+                    arguments=json.dumps(args) if not isinstance(args, str) else args,
+                ))
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    if results:
+        return results
+
+    # 2. Bare JSON blobs anywhere in text
+    for m in re.finditer(r"\{[^{}]*\}", text, re.DOTALL):
+        try:
+            obj = json.loads(m.group())
+            name = obj.get("name") or obj.get("function")
+            args = obj.get("arguments") or obj.get("parameters") or {}
+            if name and name in known_names:
+                results.append(ToolCallRequest(
+                    id=str(uuid.uuid4()), name=name,
+                    arguments=json.dumps(args) if not isinstance(args, str) else args,
+                ))
+                break  # take first match
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    return results or None
 
 
 @dataclass
@@ -424,11 +474,27 @@ class AgentRouter:
                             round_chunks.append(item)
 
                     if tool_requests is None:
-                        # Final round: flush buffered text to UI
-                        for ch in round_chunks:
-                            self.result_queue.put(_Chunk(kind="chunk", text=ch))
-                        self.result_queue.put(_Chunk(kind="done"))
-                        break
+                        # Text-based fallback: model may have emitted tool call as plain text
+                        if round_text and round_n == 0:
+                            known_names = {t["function"]["name"] for t in all_tools}
+                            text_calls = _parse_text_tool_calls(round_text, known_names)
+                            if text_calls:
+                                dev_log.log("TOOL", f"text-fallback: parsed {[tc.name for tc in text_calls]}")
+                                tool_requests = text_calls
+                                round_chunks.clear()
+                                # continue to tool dispatch below
+                            else:
+                                # Genuine final answer — flush to UI
+                                for ch in round_chunks:
+                                    self.result_queue.put(_Chunk(kind="chunk", text=ch))
+                                self.result_queue.put(_Chunk(kind="done"))
+                                break
+                        else:
+                            # Final round: flush buffered text to UI
+                            for ch in round_chunks:
+                                self.result_queue.put(_Chunk(kind="chunk", text=ch))
+                            self.result_queue.put(_Chunk(kind="done"))
+                            break
                     # Tool round: discard buffered chunks (intermediate JSON/reasoning)
                     round_chunks.clear()
 
