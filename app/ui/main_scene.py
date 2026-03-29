@@ -46,12 +46,10 @@ class MainScene(BaseScene):
         from app.ui import icon_manager
         _ic = (210, 220, 240)
         _chat_icon     = icon_manager.get("chat",       size=16, color=_ic)
-        _mic_icon      = icon_manager.get("microphone", size=16, color=_ic)
         _settings_icon = icon_manager.get("settings",   size=16, color=_ic)
 
         # buttons (rects updated in _layout)
         self._btn_chat     = Button(pygame.Rect(0, 0, 1, 1), "Chat",     icon_surf=_chat_icon,     font_size=13)
-        self._btn_voice    = Button(pygame.Rect(0, 0, 1, 1), "Voice",    icon_surf=_mic_icon,      font_size=13)
         self._btn_settings = Button(pygame.Rect(0, 0, 1, 1), "Settings", icon_surf=_settings_icon, font_size=13)
 
         self._close_rect = pygame.Rect(0, 0, 20, 20)
@@ -65,14 +63,13 @@ class MainScene(BaseScene):
         self._close_rect = pygame.Rect(w - 26, 6, 20, 20)
 
         if h >= MIN_SHOW_BUTTONS:
-            by  = h - BTN_BOTTOM - BTN_H
-            n   = 3
-            bw  = max(60, (w - CARD_PAD * 2 - BTN_GAP * (n - 1)) // n)
+            by    = h - BTN_BOTTOM - BTN_H
+            n     = 2
+            bw    = max(80, (w - CARD_PAD * 2 - BTN_GAP * (n - 1)) // n)
             total = bw * n + BTN_GAP * (n - 1)
-            bx  = (w - total) // 2
-            self._btn_chat.rect     = pygame.Rect(bx,                   by, bw, BTN_H)
-            self._btn_voice.rect    = pygame.Rect(bx + bw + BTN_GAP,    by, bw, BTN_H)
-            self._btn_settings.rect = pygame.Rect(bx + (bw + BTN_GAP)*2, by, bw, BTN_H)
+            bx    = (w - total) // 2
+            self._btn_chat.rect     = pygame.Rect(bx,              by, bw, BTN_H)
+            self._btn_settings.rect = pygame.Rect(bx + bw + BTN_GAP, by, bw, BTN_H)
 
     # ── events ────────────────────────────────────────────────────────────────
 
@@ -93,12 +90,6 @@ class MainScene(BaseScene):
         if h >= MIN_SHOW_BUTTONS:
             if self._btn_chat.handle_event(event):
                 self._go_chat()
-            if self._btn_voice.handle_event(event):
-                if self._router:
-                    text = self._router.last_assistant_message
-                    if text:
-                        self.avatar.state = AvatarState.TALKING
-                        self._router.speaker.speak(text)
             if self._btn_settings.handle_event(event):
                 self._go_settings()
 
@@ -194,7 +185,6 @@ class MainScene(BaseScene):
                 surface.blit(overlay, (0, 0))
             
             self._btn_chat.draw(surface)
-            self._btn_voice.draw(surface)
             self._btn_settings.draw(surface)
         
         # Loading overlay

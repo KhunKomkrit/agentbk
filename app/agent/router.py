@@ -291,12 +291,13 @@ class AgentRouter:
     def _mark_init_step_done(self, step_name: str) -> None:
         """Mark an initialization step as complete and notify UI."""
         self._init_steps_done += 1
-        progress_text = f"{step_name} ready ({self._init_steps_done}/{self._init_steps_total})"
-        self.result_queue.put(_Chunk(kind="init_progress", text=progress_text))
-        
+        # Set is_ready BEFORE putting chunk on queue so UI sees it as True
+        # when it drains the final init_progress chunk (avoids race condition).
         if self._init_steps_done >= self._init_steps_total:
             self.is_ready = True
             dev_log.log("BOOT", "All systems ready ✓")
+        progress_text = f"{step_name} ready ({self._init_steps_done}/{self._init_steps_total})"
+        self.result_queue.put(_Chunk(kind="init_progress", text=progress_text))
     
     def _run_stream(self) -> None:
         asyncio.run(self._async_stream())

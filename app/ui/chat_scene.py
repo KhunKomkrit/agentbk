@@ -8,6 +8,7 @@ from app.ui import font_manager
 from app.avatar.renderer import AvatarRenderer, AvatarState
 from app.agent.router import AgentRouter
 from app.agent.attachment import AttachmentResult, process_file, from_clipboard, clipboard_unsupported_msg
+from app.stt.listener import SpeechListener
 
 BG        = ( 18,  18,  30)
 HEADER_BG = ( 22,  22,  38)
@@ -24,6 +25,9 @@ BACK_HOV  = (120, 135, 180)
 ATTACH_BG = ( 45,  50,  80)
 ATTACH_HOV= ( 65,  75, 115)
 PREVIEW_BG= ( 25,  28,  48)
+MIC_BG    = ( 45,  50,  80)   # idle mic
+MIC_HOV   = ( 65,  75, 115)   # hover
+MIC_REC   = (160,  40,  40)   # recording (red)
 RADIUS    = 10
 HEADER_H  = 50
 INPUT_H   = 46
@@ -97,6 +101,9 @@ class ChatScene(BaseScene):
         self._pending_attachment: AttachmentResult | None = None
         self._toast          = ""    # short message shown above input (e.g. clipboard notice)
         self._toast_ticks    = 0
+        # STT listener
+        self._listener       = SpeechListener()
+        self._is_recording   = False
 
         self._font      = font_manager.get(14)
         self._font_sm   = font_manager.get(12)
@@ -110,6 +117,8 @@ class ChatScene(BaseScene):
         self._icon_attach   = icon_manager.get("paper-clip",    size=16, color=(200, 215, 240))
         self._icon_doc      = icon_manager.get("document",      size=20, color=(160, 180, 230))
         self._icon_dismiss  = icon_manager.get("x-mark",        size=12, color=(220, 160, 160))
+        self._icon_mic      = icon_manager.get("microphone",    size=16, color=(200, 215, 240))
+        self._icon_mic_rec  = icon_manager.get("microphone",    size=16, color=(255, 160, 160))
 
         # Enable pygame file-drop events
         pygame.event.set_allowed(None)  # allow all event types
@@ -120,12 +129,14 @@ class ChatScene(BaseScene):
         self._input_rect     = pygame.Rect(0, 0, 1, 1)
         self._send_rect      = pygame.Rect(0, 0, 1, 1)
         self._attach_rect    = pygame.Rect(0, 0, 1, 1)   # 📎 button
+        self._mic_rect       = pygame.Rect(0, 0, 1, 1)   # 🎤 button
         self._preview_rect   = pygame.Rect(0, 0, 1, 1)   # attachment preview strip
         self._dismiss_rect   = pygame.Rect(0, 0, 1, 1)   # ✕ on preview
         self._back_hov       = False
         self._send_hov       = False
         self._new_chat_hov   = False
         self._attach_hov     = False
+        self._mic_hov        = False
         self._bubble_max_w   = 200
 
         self._load_history()
@@ -181,14 +192,16 @@ class ChatScene(BaseScene):
         nc_x               = w - 6 - avatar_w - 6 - nc_w
         self._new_chat_rect = pygame.Rect(nc_x, btn_y, nc_w, btn_h)
         self._back_rect    = pygame.Rect(6, btn_y, 58, btn_h)
-        # 📎 button is a square to the left of the input box
-        attach_sz          = INPUT_H - 10
-        self._attach_rect  = pygame.Rect(PAD, h - INPUT_H + 3, attach_sz, attach_sz)
-        self._send_rect    = pygame.Rect(w - PAD - sw, h - INPUT_H + 3, sw, INPUT_H - 10)
-        # Input box sits between 📎 and send
-        inp_x              = PAD + attach_sz + 6
-        self._input_rect   = pygame.Rect(inp_x, h - INPUT_H + 3,
-                                         w - inp_x - PAD - sw - 6, INPUT_H - 10)
+        # Input row: [📎] [input box] [🎤] [send]
+        btn_sz             = INPUT_H - 10   # attach and mic share same square size
+        row_y              = h - INPUT_H + 3
+        self._attach_rect  = pygame.Rect(PAD, row_y, btn_sz, btn_sz)
+        self._send_rect    = pygame.Rect(w - PAD - sw, row_y, sw, btn_sz)
+        self._mic_rect     = pygame.Rect(w - PAD - sw - 6 - btn_sz, row_y, btn_sz, btn_sz)
+        # Input box sits between 📎 and 🎤
+        inp_x              = PAD + btn_sz + 6
+        inp_right          = self._mic_rect.left - 6
+        self._input_rect   = pygame.Rect(inp_x, row_y, inp_right - inp_x, btn_sz)
         # Attachment preview strip (only visible when _pending_attachment is set)
         self._preview_rect = pygame.Rect(PAD, h - INPUT_H - PREVIEW_H, w - PAD * 2, PREVIEW_H)
         self._dismiss_rect = pygame.Rect(
@@ -213,6 +226,7 @@ class ChatScene(BaseScene):
             self._send_hov     = self._send_rect.collidepoint(event.pos)
             self._new_chat_hov = self._new_chat_rect.collidepoint(event.pos)
             self._attach_hov   = self._attach_rect.collidepoint(event.pos)
+            self._mic_hov      = self._mic_rect.collidepoint(event.pos)
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             if self._back_rect.collidepoint(event.pos):
@@ -226,6 +240,12 @@ class ChatScene(BaseScene):
                 return
             if self._attach_rect.collidepoint(event.pos):
                 self._open_file_dialog()
+                return
+            if self._mic_rect.collidepoint(event.pos):
+                if not self._is_recording:
+                    self._start_listening()
+                else:
+                    self._stop_listening()
                 return
             # ✕ dismiss button on preview strip
             if (self._pending_attachment is not None
@@ -329,6 +349,16 @@ class ChatScene(BaseScene):
                 att.thumb = surf  # fallback if convert() unavailable yet
             att.thumb_raw = None  # free raw bytes
 
+    def _start_listening(self) -> None:
+        self._is_recording = True
+        self.avatar.state = AvatarState.THINKING
+        self._listener.start_recording()
+
+    def _stop_listening(self) -> None:
+        self._is_recording = False
+        self.avatar.state = AvatarState.IDLE
+        self._listener.stop_and_transcribe()
+
     def update(self) -> None:
         self.avatar.update()
         self._ctick += 1
@@ -343,6 +373,15 @@ class ChatScene(BaseScene):
             self._toast_ticks -= 1
             if self._toast_ticks == 0:
                 self._toast = ""
+
+        # Drain STT results → auto-fill input and send
+        for text in self._listener.drain():
+            text = text.strip()
+            if text and not text.startswith("["):
+                self._input = text
+                self._submit()
+            elif text:
+                self._set_toast(text)
 
         if not self._router or not self._is_streaming:
             return
@@ -514,6 +553,17 @@ class ChatScene(BaseScene):
             t = c
         surface.blit(t, (self._input_rect.x + 8,
                          self._input_rect.centery - t.get_height() // 2))
+
+        # ── 🎤 mic button ────────────────────────────────────────────────────
+        if self._is_recording:
+            mic_col  = MIC_REC
+            mic_icon = self._icon_mic_rec
+        else:
+            mic_col  = MIC_HOV if self._mic_hov else MIC_BG
+            mic_icon = self._icon_mic
+        pygame.draw.rect(surface, mic_col, self._mic_rect, border_radius=8)
+        surface.blit(mic_icon, (self._mic_rect.centerx - mic_icon.get_width() // 2,
+                                self._mic_rect.centery - mic_icon.get_height() // 2))
 
         # ── send button ──────────────────────────────────────────────────────
         sc = SEND_HOV if self._send_hov else SEND_BG
