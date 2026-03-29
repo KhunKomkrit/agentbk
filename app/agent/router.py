@@ -182,15 +182,23 @@ class AgentRouter:
         """Pre-load the sentence-transformers embedder so RAG never blocks a response."""
         dev_log.log("RAG", "loading embedder in background…")
         t0 = time.perf_counter()
-        try:
-            from app.rag.embedder import get_embedder
-            get_embedder()
-            self._rag_ready = True
-            dev_log.log("RAG", "embedder ready ✓", elapsed=time.perf_counter() - t0)
-        except Exception as e:
-            dev_log.log("WARN", f"embedder load failed: {e}", elapsed=time.perf_counter() - t0)
-        finally:
-            self._mark_init_step_done("RAG")
+        done = threading.Event()
+
+        def _load() -> None:
+            try:
+                from app.rag.embedder import get_embedder
+                get_embedder()
+                self._rag_ready = True
+                dev_log.log("RAG", "embedder ready ✓", elapsed=time.perf_counter() - t0)
+            except Exception as e:
+                dev_log.log("WARN", f"embedder load failed: {e}", elapsed=time.perf_counter() - t0)
+            finally:
+                done.set()
+
+        threading.Thread(target=_load, daemon=True).start()
+        if not done.wait(timeout=120.0):
+            dev_log.log("WARN", "RAG embedder timeout (120s) — RAG disabled for this session")
+        self._mark_init_step_done("RAG")
 
     def _warmup(self) -> None:
         """Pre-warm the provider's KV cache with the system prompt."""

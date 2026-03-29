@@ -11,6 +11,9 @@ os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# Force CPU to avoid MPS init deadlock when called from a background thread
+# on Apple Silicon (MPS requires main thread; embedding model is tiny — CPU is fine)
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
@@ -27,7 +30,9 @@ def get_embedder() -> "SentenceTransformer":
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(_MODEL_NAME)
+        # device="cpu" prevents MPS initialization deadlock on Apple Silicon
+        # when called from a non-main thread (MPS requires main thread)
+        _model = SentenceTransformer(_MODEL_NAME, device="cpu")
     return _model
 
 
