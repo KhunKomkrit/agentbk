@@ -326,7 +326,7 @@ class SettingsScene(BaseScene):
         """Open a CTkToplevel form for add/edit MCP server."""
         dlg = ctk.CTkToplevel(self.frame)
         dlg.title("MCP Server" if edit_idx is None else "Edit Server")
-        dlg.geometry("340x340")
+        dlg.geometry("340x480")
         dlg.grab_set()
 
         existing = self._mcp_servers[edit_idx] if edit_idx is not None else {}
@@ -342,6 +342,17 @@ class SettingsScene(BaseScene):
         url_entry.pack(fill="x", padx=16, pady=(0, 8))
         if existing.get("url"):
             url_entry.insert(0, existing["url"])
+
+        ctk.CTkLabel(dlg, text="Headers (optional)",
+                     font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
+        ctk.CTkLabel(dlg, text="One per line:  Authorization: Bearer <token>",
+                     font=font_manager.ctk_font(10),
+                     text_color=("#606080", "#606080")).pack(anchor="w", padx=16, pady=(0, 4))
+        headers_box = ctk.CTkTextbox(dlg, font=font_manager.ctk_font(12), height=72, corner_radius=6)
+        headers_box.pack(fill="x", padx=16, pady=(0, 8))
+        if existing.get("headers"):
+            for k, v in existing["headers"].items():
+                headers_box.insert("end", f"{k}: {v}\n")
 
         # Presets
         ctk.CTkLabel(dlg, text="Presets", font=font_manager.ctk_font(11),
@@ -361,12 +372,25 @@ class SettingsScene(BaseScene):
                 command=_fill,
             ).pack(fill="x", padx=16, pady=2)
 
+        def _parse_headers() -> dict[str, str]:
+            headers: dict[str, str] = {}
+            for line in headers_box.get("1.0", "end").splitlines():
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    k, v = k.strip(), v.strip()
+                    if k:
+                        headers[k] = v
+            return headers
+
         def _save() -> None:
             name = name_entry.get().strip()
             url = url_entry.get().strip()
             if not url:
                 return
-            entry = {"name": name or url, "url": url, "enabled": True}
+            hdrs = _parse_headers()
+            entry: dict = {"name": name or url, "url": url, "enabled": True}
+            if hdrs:
+                entry["headers"] = hdrs
             if edit_idx is None:
                 self._mcp_servers.append(entry)
             else:
