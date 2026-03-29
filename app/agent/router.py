@@ -183,30 +183,64 @@ class AgentRouter:
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _init_mcps(self) -> None:
-        """Load enabled MCP servers from config and connect each in a background thread."""
+        """Load enabled MCP servers from config and connect each in a background thread.
+
+        Supports two server types:
+          HTTP  — ``{"url": "http://…", "headers": {…}}``
+          Stdio — ``{"type": "stdio", "command": "uvx", "args": […], "env": {…}}``
+        """
         from app.agent.mcp_config import load_servers
         from app.agent.mcp_client import MCPClient
+
         servers = load_servers()
-        enabled = [s for s in servers if s.get("enabled") and s.get("url", "").strip()]
+
+        def _is_enabled(s: dict) -> bool:
+            if not s.get("enabled", True):
+                return False
+            if s.get("type") == "stdio":
+                return bool(s.get("command", "").strip())
+            return bool(s.get("url", "").strip())
+
+        enabled = [s for s in servers if _is_enabled(s)]
         dev_log.log("MCP", f"config: {len(servers)} servers, {len(enabled)} enabled")
-        
+
         if not enabled:
             self._mark_init_step_done("MCP")
             return
-        
+
         pending = len(enabled)
         lock = threading.Lock()
-        
+
         for srv in enabled:
-            url = srv.get("url", "").strip()
-            name = srv.get("name", url)
-            client = MCPClient(name=name, headers=srv.get("headers") or {})
+            transport = srv.get("type", "http")  # "http" | "stdio"
+            name = srv.get("name", srv.get("url") or srv.get("command", ""))
+
+            if transport == "stdio":
+                client = MCPClient(
+                    name=name,
+                    transport="stdio",
+                    command=srv.get("command", ""),
+                    args=srv.get("args") or [],
+                    env=srv.get("env") or {},
+                )
+                desc = f"{srv.get('command', '')} {' '.join(srv.get('args') or [])}"
+            else:
+                client = MCPClient(
+                    name=name,
+                    headers=srv.get("headers") or {},
+                )
+                desc = srv.get("url", "")
+
             self._mcps.append(client)
-            dev_log.log("MCP", f"connecting → {name}  {url}")
-            def _connect(c=client, u=url, n=name):
+            dev_log.log("MCP", f"connecting → {name}  {desc}")
+
+            def _connect(c=client, n=name, t=transport, u=srv.get("url", "")):
                 nonlocal pending
                 t0 = time.perf_counter()
-                asyncio.run(c.connect(u))
+                if t == "stdio":
+                    asyncio.run(c.connect_stdio())
+                else:
+                    asyncio.run(c.connect(u))
                 elapsed = time.perf_counter() - t0
                 tools_n = len(c.tools)
                 if tools_n:
@@ -217,6 +251,7 @@ class AgentRouter:
                     pending -= 1
                     if pending == 0:
                         self._mark_init_step_done("MCP")
+
             threading.Thread(target=_connect, daemon=True).start()
 
     def _warmup_rag(self) -> None:

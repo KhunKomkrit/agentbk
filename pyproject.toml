@@ -20,6 +20,7 @@ dependencies = [
     "pyobjc-framework-avfoundation>=12.1",
     "pyperclip>=1.11.0",
     "customtkinter>=5.2.0",
+    "mcp-atlassian>=0.21.0",
 ]
 
 [project.scripts]

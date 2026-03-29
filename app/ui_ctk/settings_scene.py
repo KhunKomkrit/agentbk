@@ -323,39 +323,61 @@ class SettingsScene(BaseScene):
         self._mcp_form_dialog(edit_idx=idx)
 
     def _mcp_form_dialog(self, edit_idx: int | None) -> None:
-        """Open a CTkToplevel form for add/edit MCP server."""
+        """Open a CTkToplevel form for add/edit MCP server (HTTP or stdio)."""
         dlg = ctk.CTkToplevel(self.frame)
         dlg.title("MCP Server" if edit_idx is None else "Edit Server")
-        dlg.geometry("340x480")
+        dlg.geometry("360x580")
         dlg.grab_set()
 
         existing = self._mcp_servers[edit_idx] if edit_idx is not None else {}
+        is_stdio = existing.get("type") == "stdio"
 
+        # ── Name ──────────────────────────────────────────────────────────
         ctk.CTkLabel(dlg, text="Name", font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(16, 2))
         name_entry = ctk.CTkEntry(dlg, font=font_manager.ctk_font(13), placeholder_text="My MCP Server")
         name_entry.pack(fill="x", padx=16, pady=(0, 8))
         if existing.get("name"):
             name_entry.insert(0, existing["name"])
 
-        ctk.CTkLabel(dlg, text="URL", font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
-        url_entry = ctk.CTkEntry(dlg, font=font_manager.ctk_font(13), placeholder_text="http://localhost:8000/mcp")
+        # ── Type toggle ───────────────────────────────────────────────────
+        type_var = ctk.StringVar(value="stdio" if is_stdio else "http")
+        toggle_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        toggle_row.pack(fill="x", padx=16, pady=(0, 8))
+        for label, val in (("HTTP", "http"), ("Command (stdio)", "stdio")):
+            ctk.CTkRadioButton(
+                toggle_row, text=label, variable=type_var, value=val,
+                font=font_manager.ctk_font(12),
+                fg_color=("#3A5090", "#3A5090"),
+                hover_color=("#5070C0", "#5070C0"),
+                command=lambda: _refresh_type(),
+            ).pack(side="left", padx=(0, 16))
+
+        # ── Scrollable body so fields don't overflow ──────────────────────
+        body = ctk.CTkScrollableFrame(dlg, fg_color="transparent", corner_radius=0)
+        body.pack(fill="both", expand=True, padx=0)
+
+        # ── HTTP fields ───────────────────────────────────────────────────
+        http_frame = ctk.CTkFrame(body, fg_color="transparent")
+        http_frame.pack(fill="x")
+
+        ctk.CTkLabel(http_frame, text="URL", font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
+        url_entry = ctk.CTkEntry(http_frame, font=font_manager.ctk_font(13), placeholder_text="http://localhost:8000/mcp")
         url_entry.pack(fill="x", padx=16, pady=(0, 8))
         if existing.get("url"):
             url_entry.insert(0, existing["url"])
 
-        ctk.CTkLabel(dlg, text="Headers (optional)",
-                     font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
-        ctk.CTkLabel(dlg, text="One per line:  Authorization: Bearer <token>",
+        ctk.CTkLabel(http_frame, text="Headers (optional)", font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
+        ctk.CTkLabel(http_frame, text="One per line:  Authorization: Bearer <token>",
                      font=font_manager.ctk_font(10),
                      text_color=("#606080", "#606080")).pack(anchor="w", padx=16, pady=(0, 4))
-        headers_box = ctk.CTkTextbox(dlg, font=font_manager.ctk_font(12), height=72, corner_radius=6)
+        headers_box = ctk.CTkTextbox(http_frame, font=font_manager.ctk_font(12), height=60, corner_radius=6)
         headers_box.pack(fill="x", padx=16, pady=(0, 8))
         if existing.get("headers"):
             for k, v in existing["headers"].items():
                 headers_box.insert("end", f"{k}: {v}\n")
 
-        # Presets
-        ctk.CTkLabel(dlg, text="Presets", font=font_manager.ctk_font(11),
+        # Presets (HTTP only)
+        ctk.CTkLabel(http_frame, text="Presets", font=font_manager.ctk_font(11),
                      text_color=("#6070A0", "#6070A0")).pack(anchor="w", padx=16, pady=(0, 4))
         for preset in MCP_PRESETS:
             def _fill(p=preset):
@@ -364,7 +386,7 @@ class SettingsScene(BaseScene):
                 if not name_entry.get():
                     name_entry.insert(0, p["label"])
             ctk.CTkButton(
-                dlg, text=preset["label"],
+                http_frame, text=preset["label"],
                 font=font_manager.ctk_font(11),
                 height=24, corner_radius=4,
                 fg_color=("#2A3060", "#2A3060"),
@@ -372,6 +394,67 @@ class SettingsScene(BaseScene):
                 command=_fill,
             ).pack(fill="x", padx=16, pady=2)
 
+        # ── Stdio fields ──────────────────────────────────────────────────
+        stdio_frame = ctk.CTkFrame(body, fg_color="transparent")
+        # (packed/unpacked by _refresh_type)
+
+        ctk.CTkLabel(stdio_frame, text="Command", font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
+        cmd_entry = ctk.CTkEntry(stdio_frame, font=font_manager.ctk_font(13), placeholder_text="uvx")
+        cmd_entry.pack(fill="x", padx=16, pady=(0, 8))
+        if existing.get("command"):
+            cmd_entry.insert(0, existing["command"])
+
+        ctk.CTkLabel(stdio_frame, text="Args (space-separated)", font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
+        args_entry = ctk.CTkEntry(stdio_frame, font=font_manager.ctk_font(13), placeholder_text="mcp-atlassian")
+        args_entry.pack(fill="x", padx=16, pady=(0, 8))
+        if existing.get("args"):
+            args_entry.insert(0, " ".join(existing["args"]))
+
+        ctk.CTkLabel(stdio_frame, text="Environment variables",
+                     font=font_manager.ctk_font(12)).pack(anchor="w", padx=16, pady=(0, 2))
+        ctk.CTkLabel(stdio_frame, text="One per line:  KEY=value",
+                     font=font_manager.ctk_font(10),
+                     text_color=("#606080", "#606080")).pack(anchor="w", padx=16, pady=(0, 4))
+        env_box = ctk.CTkTextbox(stdio_frame, font=font_manager.ctk_font(12), height=90, corner_radius=6)
+        env_box.pack(fill="x", padx=16, pady=(0, 8))
+        if existing.get("env"):
+            for k, v in existing["env"].items():
+                env_box.insert("end", f"{k}={v}\n")
+
+        # Quick-fill presets for mcp-atlassian
+        ctk.CTkLabel(stdio_frame, text="Presets", font=font_manager.ctk_font(11),
+                     text_color=("#6070A0", "#6070A0")).pack(anchor="w", padx=16, pady=(0, 4))
+        def _fill_atlassian():
+            cmd_entry.delete(0, "end"); cmd_entry.insert(0, "uvx")
+            args_entry.delete(0, "end"); args_entry.insert(0, "mcp-atlassian")
+            if not name_entry.get():
+                name_entry.insert(0, "Atlassian (JIRA + Confluence)")
+            if not env_box.get("1.0", "end").strip():
+                env_box.insert("end", "JIRA_URL=https://your-company.atlassian.net\n")
+                env_box.insert("end", "JIRA_USERNAME=your@email.com\n")
+                env_box.insert("end", "JIRA_API_TOKEN=your_api_token\n")
+                env_box.insert("end", "CONFLUENCE_URL=https://your-company.atlassian.net/wiki\n")
+                env_box.insert("end", "CONFLUENCE_USERNAME=your@email.com\n")
+                env_box.insert("end", "CONFLUENCE_API_TOKEN=your_api_token\n")
+        ctk.CTkButton(
+            stdio_frame, text="mcp-atlassian",
+            font=font_manager.ctk_font(11), height=24, corner_radius=4,
+            fg_color=("#2A3060", "#2A3060"), hover_color=("#3A4090", "#3A4090"),
+            command=_fill_atlassian,
+        ).pack(fill="x", padx=16, pady=2)
+
+        # ── Type toggle helper ────────────────────────────────────────────
+        def _refresh_type():
+            if type_var.get() == "stdio":
+                http_frame.pack_forget()
+                stdio_frame.pack(fill="x")
+            else:
+                stdio_frame.pack_forget()
+                http_frame.pack(fill="x")
+
+        _refresh_type()   # initial state
+
+        # ── Helpers ───────────────────────────────────────────────────────
         def _parse_headers() -> dict[str, str]:
             headers: dict[str, str] = {}
             for line in headers_box.get("1.0", "end").splitlines():
@@ -382,15 +465,42 @@ class SettingsScene(BaseScene):
                         headers[k] = v
             return headers
 
+        def _parse_env() -> dict[str, str]:
+            env: dict[str, str] = {}
+            for line in env_box.get("1.0", "end").splitlines():
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    k, v = k.strip(), v.strip()
+                    if k:
+                        env[k] = v
+            return env
+
         def _save() -> None:
             name = name_entry.get().strip()
-            url = url_entry.get().strip()
-            if not url:
-                return
-            hdrs = _parse_headers()
-            entry: dict = {"name": name or url, "url": url, "enabled": True}
-            if hdrs:
-                entry["headers"] = hdrs
+            tp = type_var.get()
+
+            if tp == "stdio":
+                cmd = cmd_entry.get().strip()
+                if not cmd:
+                    return
+                raw_args = args_entry.get().strip()
+                entry: dict = {
+                    "name":    name or cmd,
+                    "type":    "stdio",
+                    "command": cmd,
+                    "args":    raw_args.split() if raw_args else [],
+                    "env":     _parse_env(),
+                    "enabled": True,
+                }
+            else:
+                url = url_entry.get().strip()
+                if not url:
+                    return
+                hdrs = _parse_headers()
+                entry = {"name": name or url, "url": url, "enabled": True}
+                if hdrs:
+                    entry["headers"] = hdrs
+
             if edit_idx is None:
                 self._mcp_servers.append(entry)
             else:
@@ -407,7 +517,7 @@ class SettingsScene(BaseScene):
             fg_color=("#1E5A34", "#1E5A34"),
             hover_color=("#2A8048", "#2A8048"),
             command=_save,
-        ).pack(fill="x", padx=16, pady=12)
+        ).pack(fill="x", padx=16, pady=8, side="bottom")
 
     # ── Nav + Status ─────────────────────────────────────────────────────────────
 
