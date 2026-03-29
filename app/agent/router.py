@@ -382,7 +382,13 @@ class AgentRouter:
         mcp_tools = [t for c in self._mcps for t in c.tools]
         all_tools = list(TOOL_SCHEMAS) + mcp_tools
 
-        use_tools = bool(all_tools) and _wants_tools(last_user)
+        # If MCP servers are connected, always use the tool path —
+        # the user added them explicitly so they should always be available.
+        # For built-in tools only, use keyword heuristic to avoid TTFT penalty.
+        if mcp_tools:
+            use_tools = True
+        else:
+            use_tools = bool(all_tools) and _wants_tools(last_user)
         path = "tool" if use_tools else "fast"
         dev_log.log("LLM", f"path={path}  tools_available={len(all_tools)}  mcp_tools={len(mcp_tools)}")
 
