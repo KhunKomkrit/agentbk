@@ -79,12 +79,12 @@ def main() -> None:
     cur_w, cur_h = WIN_W, WIN_H
 
     # ── drag-to-move state ───────────────────────────────────────────────────
-    # เก็บ origin ตอน drag เริ่ม แล้วบวก cumulative delta
-    # ไม่ read sdl_win.position ระหว่าง drag → ไม่มี async drift
-    is_dragging    = False
-    drag_win_orig  = (0, 0)   # window position ณ ตอนที่กด
-    drag_cum_dx    = 0
-    drag_cum_dy    = 0
+    # Anchor approach: เก็บ offset ของ mouse ภายใน window ณ ตอน click
+    # ทุก MOUSEMOTION → new_win_pos = global_mouse - anchor
+    # ไม่ใช้ event.rel สะสม → ไม่มี drift เมื่อ window เคลื่อนที่
+    is_dragging        = False
+    drag_anchor        = (0, 0)   # mouse offset ภายใน window ณ ตอน mousedown
+    tracked_win_pos    = (0, 0)   # position ที่เราเขียนเองล่าสุด (ไม่ read-back)
 
     # ── resize state ─────────────────────────────────────────────────────────
     is_resizing          = False
@@ -107,9 +107,16 @@ def main() -> None:
             (cur_w, cur_h), pygame.NOFRAME | pygame.RESIZABLE
         )
 
+    # sync tracked_win_pos กับ initial window position
+    if sdl_win:
+        try:
+            tracked_win_pos = tuple(sdl_win.position)
+        except Exception:
+            tracked_win_pos = (0, 0)
+
     running = True
     while running:
-        clock.tick(FPS)
+        clock.tick_busy_loop(FPS)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -127,10 +134,9 @@ def main() -> None:
                     resize_cum_dx   = 0
                     resize_cum_dy   = 0
                 elif event.pos[1] <= DRAG_ZONE_H:
-                    is_dragging   = True
-                    drag_win_orig = sdl_win.position if sdl_win else (0, 0)
-                    drag_cum_dx   = 0
-                    drag_cum_dy   = 0
+                    is_dragging  = True
+                    # anchor = mouse position ภายใน window — คงที่ตลอด drag
+                    drag_anchor  = event.pos
 
             # ── mouse up ─────────────────────────────────────────────────────
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -145,13 +151,16 @@ def main() -> None:
                            resize_win_orig[1] + resize_cum_dy)
                 continue
 
-            # ── window move drag (smooth: origin + cumulative, no re-read) ──
+            # ── window move drag (anchor: new_pos = global_mouse - anchor) ──
             if event.type == pygame.MOUSEMOTION and is_dragging:
-                drag_cum_dx += event.rel[0]
-                drag_cum_dy += event.rel[1]
                 if sdl_win:
-                    sdl_win.position = (drag_win_orig[0] + drag_cum_dx,
-                                        drag_win_orig[1] + drag_cum_dy)
+                    # global mouse = tracked window pos + event.pos (window-relative)
+                    gx = tracked_win_pos[0] + event.pos[0]
+                    gy = tracked_win_pos[1] + event.pos[1]
+                    new_x = gx - drag_anchor[0]
+                    new_y = gy - drag_anchor[1]
+                    sdl_win.position = (new_x, new_y)
+                    tracked_win_pos = (new_x, new_y)
                 continue
 
             scenes.handle_event(event)
