@@ -1,0 +1,122 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.uv/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Claude AI
+.claude/settings.json
+.claude/settings.local.json
+.claude/history/
+.claude/**/history/
+.claude/.session
+
+# Project-specific
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# User data directories
+~/.agentbk/conversation_history.json
+~/.agentbk/mcp_servers.json
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# ChromaDB
+chroma_data/
+.chroma/
+
+# Model caches
+.cache/
+models/
+checkpoints/
+
+# Environment variables (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# macOS menubar builds
+*.app
+
+# Screenshots (optional - uncomment if you don't want to track)
+# assets/images/screens/*.png
