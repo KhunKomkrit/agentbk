@@ -37,6 +37,25 @@ PREVIEW_H = 64   # height of attachment preview strip above input
 _IDLE_TIMER = pygame.USEREVENT + 10
 
 
+def _clipboard_get() -> str:
+    """Return text from system clipboard. Works on macOS, Windows, Linux."""
+    try:
+        import pyperclip
+        text = pyperclip.paste()
+        return text.replace("\r\n", "\n").replace("\r", "\n") if text else ""
+    except Exception:
+        return ""
+
+
+def _clipboard_set(text: str) -> None:
+    """Put text into system clipboard. Works on macOS, Windows, Linux."""
+    try:
+        import pyperclip
+        pyperclip.copy(text)
+    except Exception:
+        pass
+
+
 def _wrap(text: str, font: pygame.font.Font, max_w: int) -> list[str]:
     """Word-wrap with character-level fallback for Thai / CJK text."""
     lines: list[str] = []
@@ -132,12 +151,13 @@ class ChatScene(BaseScene):
         self._mic_rect       = pygame.Rect(0, 0, 1, 1)   # 🎤 button
         self._preview_rect   = pygame.Rect(0, 0, 1, 1)   # attachment preview strip
         self._dismiss_rect   = pygame.Rect(0, 0, 1, 1)   # ✕ on preview
-        self._back_hov       = False
-        self._send_hov       = False
-        self._new_chat_hov   = False
-        self._attach_hov     = False
-        self._mic_hov        = False
-        self._bubble_max_w   = 200
+        self._back_hov        = False
+        self._send_hov        = False
+        self._new_chat_hov    = False
+        self._attach_hov      = False
+        self._mic_hov         = False
+        self._input_select_all = False
+        self._bubble_max_w    = 200
 
         self._load_history()
         self._layout(win_w, win_h)
@@ -256,22 +276,72 @@ class ChatScene(BaseScene):
         if event.type == pygame.MOUSEWHEEL:
             self._scroll = max(0, self._scroll - event.y * 20)
 
-        if event.type == pygame.KEYDOWN:
-            # Ctrl+V / Cmd+V — clipboard paste
-            mods = pygame.key.get_mods()
-            if event.key == pygame.K_v and (mods & (pygame.KMOD_CTRL | pygame.KMOD_META)):
-                result = from_clipboard()
-                if result:
-                    self._pending_attachment = result
+        # ── TEXTINPUT: regular typing (handles IME, Thai, emoji) ───────────
+        # On macOS, Cmd+V generates TEXTINPUT "v" — block it when Cmd/Ctrl held
+        if event.type == pygame.TEXTINPUT:
+            _LGUI = getattr(pygame, "KMOD_LGUI", 0x0400)
+            _RGUI = getattr(pygame, "KMOD_RGUI", 0x0800)
+            held = pygame.key.get_mods() & (
+                pygame.KMOD_CTRL | pygame.KMOD_META | _LGUI | _RGUI
+            )
+            if held:
+                return  # shortcut in progress — don't append the letter
+            text = event.text
+            if text:
+                if getattr(self, "_input_select_all", False):
+                    self._input = text
+                    self._input_select_all = False
                 else:
-                    self._set_toast(clipboard_unsupported_msg())
+                    self._input += text
+            return
+
+        if event.type == pygame.KEYDOWN:
+            mods = event.mod
+            _LGUI = getattr(pygame, "KMOD_LGUI", 0x0400)
+            _RGUI = getattr(pygame, "KMOD_RGUI", 0x0800)
+            ctrl = mods & (pygame.KMOD_CTRL | pygame.KMOD_META | _LGUI | _RGUI)
+
+            # ── Cmd/Ctrl+V — paste ──────────────────────────────────────────
+            if event.key == pygame.K_v and ctrl:
+                clip_text = _clipboard_get()
+                if clip_text:
+                    self._input += clip_text
+                else:
+                    result = from_clipboard()
+                    if result:
+                        self._pending_attachment = result
+                    else:
+                        self._set_toast(clipboard_unsupported_msg())
                 return
+
+            # ── Cmd/Ctrl+A — select all (mark for easy replacement) ─────────
+            if event.key == pygame.K_a and ctrl:
+                self._input_select_all = True
+                return
+
+            # ── Cmd/Ctrl+X — cut ────────────────────────────────────────────
+            if event.key == pygame.K_x and ctrl:
+                if self._input:
+                    _clipboard_set(self._input)
+                    self._input = ""
+                return
+
+            # ── Cmd/Ctrl+C — copy ────────────────────────────────────────────
+            if event.key == pygame.K_c and ctrl:
+                if self._input:
+                    _clipboard_set(self._input)
+                return
+
             if event.key == pygame.K_RETURN:
                 self._submit()
             elif event.key == pygame.K_BACKSPACE:
-                self._input = self._input[:-1]
-            elif event.unicode and event.unicode.isprintable():
-                self._input += event.unicode
+                if getattr(self, "_input_select_all", False):
+                    self._input = ""
+                else:
+                    self._input = self._input[:-1]
+
+            # Any key clears select-all state
+            self._input_select_all = False
 
     def _submit(self) -> None:
         text = self._input.strip()

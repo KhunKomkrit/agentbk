@@ -24,6 +24,48 @@ _DTYPE       = "float32"
 _DEFAULT_MODEL = "small"
 
 
+def _get_mic_permission_status() -> int:
+    """Return AVFoundation authorization status (0=notDetermined 1=restricted 2=denied 3=authorized).
+    Returns 3 on non-macOS platforms."""
+    try:
+        import AVFoundation as av  # type: ignore[import]
+        return av.AVCaptureDevice.authorizationStatusForMediaType_(av.AVMediaTypeAudio)
+    except ImportError:
+        return 3
+
+
+def _request_mic_permission() -> bool:
+    """macOS: request microphone permission via AVFoundation dialog.
+
+    Returns True if permission is granted, False if denied.
+    On non-macOS platforms always returns True.
+    """
+    try:
+        import AVFoundation as av  # type: ignore[import]
+    except ImportError:
+        return True  # not macOS or pyobjc not installed — let sounddevice handle it
+
+    status = av.AVCaptureDevice.authorizationStatusForMediaType_(av.AVMediaTypeAudio)
+    if status == 3:
+        return True
+    if status == 2 or status == 1:
+        return False
+
+    # status == 0 (notDetermined) — request access; this shows the macOS dialog
+    granted_event = threading.Event()
+    granted_holder: list[bool] = [False]
+
+    def _handler(granted: bool) -> None:
+        granted_holder[0] = granted
+        granted_event.set()
+
+    av.AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+        av.AVMediaTypeAudio, _handler
+    )
+    granted_event.wait(timeout=30.0)  # wait up to 30 s for user to respond
+    return granted_holder[0]
+
+
 class SpeechListener:
     """Record audio from the default microphone, then transcribe with Whisper.
 
@@ -51,14 +93,42 @@ class SpeechListener:
     # ── public API ────────────────────────────────────────────────────────────
 
     def start_recording(self) -> None:
-        """Open the microphone stream and start collecting audio."""
+        """Open the microphone stream and start collecting audio.
+
+        Permission request and PortAudio reinit run in a background thread so
+        the pygame event loop is never blocked.
+        """
         if self._is_recording:
             return
         try:
-            import sounddevice as sd
+            import sounddevice as sd  # noqa: F401
         except ImportError:
             self.result_queue.put("[ไม่พบ sounddevice — รัน: uv add sounddevice]")
             return
+
+        # Run permission check + stream open in background to avoid blocking main thread
+        threading.Thread(target=self._open_stream, daemon=True).start()
+
+    def _open_stream(self) -> None:
+        """Background: request permission (if needed) then open the InputStream."""
+        import sounddevice as sd
+
+        status = _get_mic_permission_status()
+        if status == 2 or status == 1:
+            self.result_queue.put("[mic denied: เปิด System Settings › Privacy › Microphone แล้วเพิ่ม Terminal]")
+            return
+        if status == 0:
+            # notDetermined — show dialog (blocks this background thread, not main)
+            _request_mic_permission()
+            self.result_queue.put("[mic: ได้รับสิทธิ์แล้ว กรุณารีสตาร์ท app เพื่อเปิดใช้งานไมโครโฟน]")
+            return
+
+        # status == 3: authorized — reinit PortAudio so it sees the mic
+        try:
+            sd._terminate()   # type: ignore[attr-defined]
+            sd._initialize()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         self._chunks = []
         self._is_recording = True

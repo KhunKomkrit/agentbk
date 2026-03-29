@@ -168,7 +168,11 @@ def main() -> None:
         scenes.update()
 
         # ── draw ─────────────────────────────────────────────────────────────
-        scenes.draw(screen)
+        try:
+            scenes.draw(screen)
+        except Exception as _draw_exc:
+            import traceback, sys
+            traceback.print_exc(file=sys.stderr)
         _draw_grip(screen, grip_rect(), grip_hovered)
         pygame.display.flip()
 

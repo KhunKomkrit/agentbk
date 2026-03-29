@@ -97,16 +97,18 @@ class MainScene(BaseScene):
         self.avatar.update()
         self._loading_tick += 1
         
-        # Poll for initialization progress messages
+        # Always check is_ready first — completely independent of queue
+        if not self._init_complete and self._router and self._router.is_ready:
+            self._init_complete = True
+            self.avatar.state = AvatarState.IDLE
+
+        # Poll queue for progress display messages only (does NOT gate _init_complete)
         if not self._init_complete and self._router:
             while True:
                 try:
                     chunk = self._router.result_queue.get_nowait()
                     if chunk.kind == "init_progress":
                         self._loading_messages.append(chunk.text)
-                        if self._router.is_ready:
-                            self._init_complete = True
-                            self.avatar.state = AvatarState.IDLE
                     elif chunk.kind == "ollama_progress":
                         self._ollama_status = chunk.text
                         # parse fraction from e.g. "pulling 45%" → 0.45
