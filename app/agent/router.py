@@ -174,6 +174,9 @@ def _filter_tools_for_query(query: str, all_tools: list[dict]) -> list[dict]:
             filtered.append(t)
 
     return filtered[:_MAX_TOOLS_PER_ROUND] if filtered else all_tools[:_MAX_TOOLS_PER_ROUND]
+
+
+@dataclass
 class _Chunk:
     kind: Literal["chunk", "done", "error", "tool_use", "init_progress", "ollama_progress"]
     text: str = ""
