@@ -1,6 +1,7 @@
 """SettingsScene — provider, model, always-on-top, MCP server management."""
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 from typing import TYPE_CHECKING
@@ -276,15 +277,16 @@ class SettingsScene(BaseScene):
         row.columnconfigure(0, weight=1)
 
         enabled_var = ctk.BooleanVar(value=srv.get("enabled", True))
-        ctk.CTkCheckBox(
-            row, text=srv.get("name", srv.get("url", "")),
+        chk = ctk.CTkCheckBox(
+            row, text=srv.get("name", srv.get("url", srv.get("command", ""))),
             variable=enabled_var,
             font=font_manager.ctk_font(12),
             text_color=("#A0B0DC", "#A0B0DC"),
             fg_color=("#3A5090", "#3A5090"),
             hover_color=("#5070C0", "#5070C0"),
             command=lambda i=idx, v=enabled_var: self._toggle_mcp(i, v.get()),
-        ).pack(side="left", padx=8, pady=6, fill="x", expand=True)
+        )
+        chk.pack(side="left", padx=8, pady=6, fill="x", expand=True)
 
         ctk.CTkButton(
             row, text="✕", width=24, height=22, corner_radius=4,
@@ -303,6 +305,53 @@ class SettingsScene(BaseScene):
             text_color=("#6090C0", "#6090C0"),
             command=lambda i=idx: self._edit_mcp_dialog(i),
         ).pack(side="right", padx=0, pady=4)
+
+        # ── Test connection button ─────────────────────────────────────────
+        ctk.CTkButton(
+            row, text="⟳", width=24, height=22, corner_radius=4,
+            font=font_manager.ctk_font(12),
+            fg_color="transparent",
+            hover_color=("#203040", "#203040"),
+            text_color=("#6090C0", "#6090C0"),
+            command=lambda s=srv, c=chk: self._test_mcp_connection(s, c),
+        ).pack(side="right", padx=0, pady=4)
+
+    def _test_mcp_connection(self, srv: dict, chk: ctk.CTkCheckBox) -> None:
+        """Test MCP server connectivity in background; colour checkbox green/red."""
+        # Dim to grey while testing
+        chk.configure(fg_color=("#505050", "#505050"))
+        self._show_status(f"Testing {srv.get('name', '')}…")
+
+        def _work() -> None:
+            ok = False
+            try:
+                from app.agent.mcp_client import MCPClient
+                transport = srv.get("type", "http")
+                if transport == "stdio":
+                    client = MCPClient(
+                        name=srv.get("name", ""),
+                        transport="stdio",
+                        command=srv.get("command", ""),
+                        args=srv.get("args") or [],
+                        env=srv.get("env") or {},
+                    )
+                    asyncio.run(client.connect_stdio())
+                else:
+                    client = MCPClient(
+                        name=srv.get("name", ""),
+                        headers=srv.get("headers") or {},
+                    )
+                    asyncio.run(client.connect(srv.get("url", "")))
+                ok = len(client.tools) > 0
+                msg = f"✓ {srv.get('name','')}  {len(client.tools)} tools"
+            except Exception as e:
+                msg = f"✗ {srv.get('name','')}: {e}"
+
+            color = ("#1E6A2E", "#1E6A2E") if ok else ("#6A1E1E", "#6A1E1E")
+            self.frame.after(0, lambda: chk.configure(fg_color=color))
+            self.frame.after(0, lambda: self._show_status(msg, ms=4000))
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def _toggle_mcp(self, idx: int, enabled: bool) -> None:
         if 0 <= idx < len(self._mcp_servers):
