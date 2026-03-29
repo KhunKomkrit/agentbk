@@ -20,7 +20,7 @@ class OllamaProvider(BaseLLMProvider):
         # Ensure /v1 suffix for OpenAI-compatible endpoint
         if not base_url.endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
-        self.model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        self.model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         # Vision support is inferred from the model name.
         self.supports_vision = any(kw in self.model.lower() for kw in _VISION_KEYWORDS)
         self._client = AsyncOpenAI(

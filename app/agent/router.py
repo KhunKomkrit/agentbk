@@ -91,7 +91,89 @@ def _parse_text_tool_calls(
     return results or None
 
 
-@dataclass
+# ── Tool filtering ────────────────────────────────────────────────────────────
+# Maps keyword sets → tool-name prefix/substring patterns.
+# Query is matched against keywords; only matching categories' tools are kept.
+# Each entry: (keywords, tool_patterns)
+#   keywords     — words to look for in the user query (lowercase)
+#   tool_patterns — substrings matched against tool["function"]["name"]
+_TOOL_CATEGORIES: list[tuple[frozenset[str], list[str]]] = [
+    # ── JIRA ──────────────────────────────────────────────────────────────
+    (
+        frozenset({
+            "jira", "issue", "ticket", "card", "sprint", "scrum", "story",
+            "task", "bug", "epic", "project", "board", "backlog", "assignee",
+            "priority", "comment", "transition", "move", "close", "reopen",
+            "atlassian", "browse", "scrum-", "proj-",
+            # Thai
+            "การ์ด", "งาน", "ปัญหา", "โปรเจค", "บอร์ด",
+        }),
+        ["jira"],
+    ),
+    # ── Confluence ────────────────────────────────────────────────────────
+    (
+        frozenset({
+            "confluence", "wiki", "page", "space", "document", "docs",
+            "confluence_", "เอกสาร", "หน้า",
+        }),
+        ["confluence"],
+    ),
+    # ── Space / NASA ──────────────────────────────────────────────────────
+    (
+        frozenset({
+            "space", "nasa", "iss", "asteroid", "planet", "apod", "neo",
+            "astronaut", "orbit", "rocket", "star", "galaxy", "cosmos",
+            "อวกาศ", "ดาว", "นักบินอวกาศ",
+        }),
+        ["iss", "apod", "neo", "people_in_space", "planet"],
+    ),
+    # ── Date / time / math ────────────────────────────────────────────────
+    (
+        frozenset({
+            "time", "date", "today", "now", "clock", "calculate", "math",
+            "compute", "sum", "weather",
+            "เวลา", "วันที่", "วันนี้", "คำนวณ", "อากาศ",
+        }),
+        ["get_current_time", "calculator", "weather"],
+    ),
+]
+# Maximum tools sent to LLM in one round (keeps prompt manageable for small models).
+_MAX_TOOLS_PER_ROUND = 12
+
+
+def _filter_tools_for_query(query: str, all_tools: list[dict]) -> list[dict]:
+    """Return the subset of tools most relevant to *query*.
+
+    Strategy:
+    1. Score each category by keyword overlap with the query.
+    2. Collect tools whose name contains any pattern from matched categories.
+    3. Fall back to all tools if nothing matched (safety net).
+    4. Cap at _MAX_TOOLS_PER_ROUND.
+    """
+    lower = query.lower()
+    matched_patterns: list[str] = []
+
+    for keywords, patterns in _TOOL_CATEGORIES:
+        if any(kw in lower for kw in keywords):
+            matched_patterns.extend(patterns)
+
+    if not matched_patterns:
+        # No category matched — send a capped slice so the model isn't overwhelmed
+        return all_tools[:_MAX_TOOLS_PER_ROUND]
+
+    filtered = [
+        t for t in all_tools
+        if any(pat in t["function"]["name"].lower() for pat in matched_patterns)
+    ]
+
+    # Always include local built-in tools (they're small and always useful)
+    from app.agent.tools import TOOL_SCHEMAS as _LOCAL
+    local_names = {s["function"]["name"] for s in _LOCAL}
+    for t in all_tools:
+        if t["function"]["name"] in local_names and t not in filtered:
+            filtered.append(t)
+
+    return filtered[:_MAX_TOOLS_PER_ROUND] if filtered else all_tools[:_MAX_TOOLS_PER_ROUND]
 class _Chunk:
     kind: Literal["chunk", "done", "error", "tool_use", "init_progress", "ollama_progress"]
     text: str = ""
@@ -439,8 +521,13 @@ class AgentRouter:
             use_tools = True
         else:
             use_tools = bool(all_tools) and _wants_tools(last_user)
+
+        # Filter to only relevant tools for this query (keeps prompt small for
+        # local models — 58 tools → typically 5-12 relevant ones).
+        active_tools = _filter_tools_for_query(last_user, all_tools) if use_tools else []
+
         path = "tool" if use_tools else "fast"
-        dev_log.log("LLM", f"path={path}  tools_available={len(all_tools)}  mcp_tools={len(mcp_tools)}")
+        dev_log.log("LLM", f"path={path}  tools_sent={len(active_tools)}/{len(all_tools)}  mcp_tools={len(mcp_tools)}")
 
         full = ""
         t_first_chunk: float | None = None
@@ -462,7 +549,7 @@ class AgentRouter:
                     round_text    = ""
                     round_chunks: list[str] = []
 
-                    async for item in self._provider.stream_tools(messages, all_tools):
+                    async for item in self._provider.stream_tools(messages, active_tools):
                         if isinstance(item, list):
                             tool_requests = item
                         else:
@@ -476,7 +563,7 @@ class AgentRouter:
                     if tool_requests is None:
                         # Text-based fallback: model may have emitted tool call as plain text
                         if round_text and round_n == 0:
-                            known_names = {t["function"]["name"] for t in all_tools}
+                            known_names = {t["function"]["name"] for t in active_tools}
                             text_calls = _parse_text_tool_calls(round_text, known_names)
                             if text_calls:
                                 dev_log.log("TOOL", f"text-fallback: parsed {[tc.name for tc in text_calls]}")
